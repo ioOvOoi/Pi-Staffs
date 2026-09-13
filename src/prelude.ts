@@ -1,11 +1,15 @@
 /**
- * 生成注入到 fabric_exec 代码之前的 prelude。
+ * 生成挂到 fabric_exec `prelude` 入参上的宿主 prelude。
  *
- * 为什么用「注入代码字符串」而不是注册一个 Fabric 工具：pi-fabric 只给了扩展
+ * 为什么是 prelude 而不是注册一个 Fabric 工具：pi-fabric 只给了扩展
  * pi.on("tool_call") 这一个入口（role-router 0.4.1 的做法，票 02 逐行读过），
- * 注入的代码与用户的 fabric_exec 代码同一作用域，所以能直接拿到宿主声明的 agents/mesh。
+ * prelude 与用户的 fabric_exec 代码同一作用域，所以能直接拿到宿主声明的 agents/mesh。
  *
- * 注入的代码一律是 JS（不是 TS）：宿主冒烟测试把整段 prelude 丢进 new Function 执行，
+ * 为什么不再往 code 里拼字符串（pi-fabric ≥ 0.93.0 起提供 prelude 入参）：拼在一起时，
+ * prelude 与模型代码共用同一份类型门禁与源映射，prelude 里一个类型错误就会以模型代码的行号
+ * 报出来，并把整条 fabric_exec 通道一起拒掉（见本仓 67ae6d5 的实机故障）。
+ *
+ * prelude 一律是 JS（不是 TS）：宿主冒烟测试把整段 prelude 丢进 new Function 执行，
  * 一旦掺入类型注解，测试就再也跑不起来——那是我们唯一能在不启动 Pi 的情况下验证韧性的手段。
  *
  * 档位（D23）在宿主侧就算完：guest 只拿到「角色 → 最终模型」的解析结果，不需要认识别名表。

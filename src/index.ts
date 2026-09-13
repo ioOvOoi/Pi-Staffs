@@ -61,7 +61,7 @@ const describeRole = (
  *
  * 三条事件分工（照抄 role-router 已验证的注入方式）：
  *  - session_start：加载/生成 ~/.pi/agent/pi-staffs.json，把问题一次性提示清楚；
- *  - tool_call：给 fabric_exec 代码前置注入 prelude（guest 侧才有 staffs.*）；
+ *  - tool_call：把 prelude 挂到 fabric_exec 的 prelude 入参（guest 侧才有 staffs.*）；
  *  - before_agent_start：把派发指引写进 system prompt。
  */
 export default function piStaffs(pi: ExtensionAPI): void {
@@ -117,7 +117,13 @@ export default function piStaffs(pi: ExtensionAPI): void {
       )
          return;
       const { config } = snapshot();
-      event.input.code = `${buildStaffsPrelude({ config, promptFallback: readRolePrompt })}\n${event.input.code}`;
+      // prelude 挂到入参而不是拼进 code（pi-fabric ≥ 0.93.0）：门禁与源映射都归宿主，模型的
+      // 代码一个字都不动。过去拼字符串时，prelude 里任何类型错误都会以模型代码的行号报出来，
+      // 并把整条 fabric_exec 通道一起拒掉（见本仓 67ae6d5 的实机故障）。
+      event.input.prelude = buildStaffsPrelude({
+         config,
+         promptFallback: readRolePrompt,
+      });
    });
 
    pi.on("before_agent_start", (event) => {

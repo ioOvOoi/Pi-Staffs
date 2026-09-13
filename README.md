@@ -23,7 +23,7 @@ git submodule add https://github.com/ioOvOoi/Pi-Staffs.git selfex/Pi-Staffs
 
 在 `~/.pi/agent/settings.json` 的 `packages` 里加一条**相对路径**（相对 settings.json 所在目录解析）：`"../selfex/Pi-Staffs"`。这样同一份配置在多台机器上都能用（只要仓库都放在 `~/.pi/selfex/` 下），不要写死绝对路径。重启 Pi 或 `/reload`。
 
-依赖：Pi ≥ 0.80.6、pi-fabric ≥ 0.21.10（`peerDependencies`）、Node ≥ 24。`typebox` 由 Pi 提供，因此声明为 peer。
+依赖：Pi ≥ 0.80.6、pi-fabric ≥ 0.93.0（`peerDependencies`，prelude 走它的 `fabric_exec` `prelude` 入参）、Node ≥ 24。`typebox` 由 Pi 提供，因此声明为 peer。
 
 ## 首次运行
 
@@ -54,7 +54,7 @@ git submodule add https://github.com/ioOvOoi/Pi-Staffs.git selfex/Pi-Staffs
 
 ## 派发
 
-`tool_call` 钩子会自动给 `fabric_exec` 前置 prelude，因此在代码里直接用：
+`tool_call` 钩子会把 prelude 挂到 `fabric_exec` 的 `prelude` 入参上（模型代码不被改动），因此在代码里直接用：
 
 ```js
 staffs.list();                        // 角色名

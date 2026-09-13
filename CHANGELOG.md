@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0
+
+治本：prelude 改走 `fabric_exec` 的 `prelude` 入参，不再往模型代码里拼字符串。
+
+- 依赖上抬：pi-fabric ≥ 0.93.0（`prelude` 入参自该版本起支持）。
+- 消失的故障模式：prelude 与模型代码不再共用类型门禁与源映射。此前 prelude 里的类型错误会以
+  模型代码的行号报出来，并把整条 `fabric_exec` 通道一起拒掉（本仓 67ae6d5 的实机故障）。
+- 行为不变：guest 侧照样有 `staffs.*`；`tool_call` 钩子只设 `event.input.prelude`，模型代码一字不动。
+
 ## 1.0.0
 
 首个可用版本：把「角色矩阵 + 模型档位 + 有状态派发」做成 Pi 扩展。

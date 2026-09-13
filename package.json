@@ -1,6 +1,6 @@
 {
   "name": "pi-staffs",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Pi 的编排插件：角色矩阵 + 有状态派发 + 团队 DAG + TUI 面板",
   "type": "module",
   "main": "./src/index.ts",
@@ -39,7 +39,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.80.6",
-    "pi-fabric": ">=0.21.10",
+    "pi-fabric": ">=0.93.0",
     "typebox": "*"
   },
   "devDependencies": {

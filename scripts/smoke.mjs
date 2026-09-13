@@ -172,26 +172,26 @@ for (const name of roleNames) {
 }
 ok("session_start：生成七神祇配置 + baseline 档位（无 fallbacks）");
 
-// ---------- 3. tool_call 只给 fabric_exec 注入 ----------
+// ---------- 3. tool_call 只给 fabric_exec 挂 prelude ----------
 const fabricEvent = {
    toolName: "fabric_exec",
    input: { code: "const x = 1;" },
 };
 await hooks.get("tool_call")(fabricEvent);
 assert(
-   fabricEvent.input.code.includes("const __staffsModels"),
-   "注入串应带角色→模型表",
+   fabricEvent.input.prelude.includes("const __staffsModels"),
+   "prelude 应带角色→模型表",
 );
 assert(
-   fabricEvent.input.code.includes("const __staffsPreset"),
-   "注入串应带档位信息",
+   fabricEvent.input.prelude.includes("const __staffsPreset"),
+   "prelude 应带档位信息",
 );
 assert(
-   fabricEvent.input.code.endsWith("const x = 1;"),
-   "注入应只前置，不吞掉原代码",
+   fabricEvent.input.code === "const x = 1;",
+   "模型代码不该被改动（prelude 走入参）",
 );
 assert(
-   !fabricEvent.input.code.includes("__staffsLoadHealth"),
+   !fabricEvent.input.prelude.includes("__staffsLoadHealth"),
    "健康表已删除（D24）",
 );
 const bashEvent = { toolName: "bash", input: { command: "ls" } };
@@ -200,7 +200,8 @@ assert(bashEvent.input.command === "ls", "非 fabric_exec 不该被动过");
 const weirdEvent = { toolName: "fabric_exec", input: { code: 42 } };
 await hooks.get("tool_call")(weirdEvent);
 assert(weirdEvent.input.code === 42, "code 不是字符串时不该注入");
-ok("tool_call：只给 fabric_exec 前置注入 prelude");
+assert(weirdEvent.input.prelude === undefined, "code 不是字符串时不挂 prelude");
+ok("tool_call：只给 fabric_exec 挂 prelude（模型代码不动）");
 
 // ---------- 4. before_agent_start ----------
 const guidancePatch = await hooks.get("before_agent_start")({
