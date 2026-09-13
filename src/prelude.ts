@@ -212,7 +212,7 @@ const staffs = {
          map["council-" + index] = ref;
       });
       if (__staffsCouncilConfig.synthResolved) map["council-synth"] = __staffsCouncilConfig.synthResolved;
-      return __staffsPreflight(__staffsHost(), map);
+      return __staffsPreflight(__staffsHost(), map, Object.keys(map));
    },
    run: (request) => __staffsDispatchRun(request, false),
    spawn: (request) => __staffsDispatchRun(request, true),

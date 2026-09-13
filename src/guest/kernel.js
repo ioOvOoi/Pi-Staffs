@@ -42,7 +42,7 @@ function __staffsSleep(ms) {
    const env = __staffsEnv();
    if (typeof env.sleep === "function") return env.sleep(ms);
    return new Promise((resolve) => {
-      setTimeout(() => resolve(), Math.max(0, ms));
+      setTimeout(() => resolve(undefined), Math.max(0, ms));
    });
 }
 
@@ -58,7 +58,8 @@ function __staffsHost() {
    const env = __staffsEnv();
    let realAgents;
    try {
-      // @ts-expect-error —— agents 由 Fabric 在 guest 顶层声明，宿主类型系统看不到
+      // @ts-ignore —— agents 由 Fabric 在 guest 顶层声明：宿主 tsc 看不到（需要压制），
+      // 而 Fabric 的 guest 声明里它确实存在（@ts-expect-error 会因此报「未使用」而卡住门禁）
       realAgents = agents;
    } catch {
       realAgents = undefined;
@@ -516,7 +517,7 @@ async function __staffsRevive(host, request, dispatch) {
 
 /**
  * 预检（票 14 的快速失败）：用 agents.models() 判断引用是否存在，缺失时列出该 provider 的候选模型。
- * @param {StaffsHost} host @param {Record<string, string>} models @param {string[]=} roles
+ * @param {StaffsHost} host @param {Record<string, string>} models @param {string|string[]=} roles
  * @returns {Promise<{ ok: boolean; models: Array<{ model: string; available: boolean; candidates: string[] }>; missing: string[] }>}
  */
 async function __staffsPreflight(host, models, roles) {
@@ -539,9 +540,11 @@ async function __staffsPreflight(host, models, roles) {
       byProvider.set(provider, list);
    }
    const targets = [];
+   // roles 支持单个名字或数组：README 里写的是 staffs.preflight("fixer")。
+   const wanted =
+      typeof roles === "string" ? [roles] : Array.isArray(roles) ? roles : [];
    for (const name of Object.keys(models)) {
-      if (Array.isArray(roles) && roles.length > 0 && !roles.includes(name))
-         continue;
+      if (wanted.length > 0 && !wanted.includes(name)) continue;
       targets.push(models[name]);
    }
    const unique = Array.from(new Set(targets));
