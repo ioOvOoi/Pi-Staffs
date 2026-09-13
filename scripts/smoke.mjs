@@ -118,14 +118,17 @@ const mod = await load("src/index.ts");
 const hookLists = new Map();
 const hooks = {
    has: (name) => hookLists.has(name),
-   get: (name) => async (event, context = ctx) => {
-      let patch;
-      for (const handler of hookLists.get(name) ?? []) {
-         const result = await handler(event, context);
-         if (result && typeof result === "object") patch = { ...patch, ...result };
-      }
-      return patch;
-   },
+   get:
+      (name) =>
+      async (event, context = ctx) => {
+         let patch;
+         for (const handler of hookLists.get(name) ?? []) {
+            const result = await handler(event, context);
+            if (result && typeof result === "object")
+               patch = { ...patch, ...result };
+         }
+         return patch;
+      },
 };
 const commands = new Map();
 const tools = new Map();
@@ -135,7 +138,8 @@ const ctx = {
    ui: { notify: (text, level) => notifications.push({ text, level }) },
 };
 mod.default({
-   on: (name, handler) => hookLists.set(name, [...(hookLists.get(name) ?? []), handler]),
+   on: (name, handler) =>
+      hookLists.set(name, [...(hookLists.get(name) ?? []), handler]),
    registerTool: (tool) => tools.set(tool.name, tool),
    registerCommand: (name, options) => commands.set(name, options),
 });
@@ -199,7 +203,9 @@ assert(weirdEvent.input.code === 42, "code 不是字符串时不该注入");
 ok("tool_call：只给 fabric_exec 前置注入 prelude");
 
 // ---------- 4. before_agent_start ----------
-const guidancePatch = await hooks.get("before_agent_start")({ systemPrompt: "S" });
+const guidancePatch = await hooks.get("before_agent_start")({
+   systemPrompt: "S",
+});
 assert(
    guidancePatch.systemPrompt.includes("Pi-Staffs 编排"),
    "应把派发指引写进 system prompt",
@@ -598,9 +604,15 @@ const parsed = review.parseFindings(
    ].join("\n"),
 );
 assert(parsed.length === 2, `应解析出 2 条发现，实际 ${parsed.length}`);
-assert(parsed[0].file === "src/a.ts" && parsed[0].line === 12, "应解析文件与行号");
+assert(
+   parsed[0].file === "src/a.ts" && parsed[0].line === 12,
+   "应解析文件与行号",
+);
 assert(parsed[1].severity === "major", "P1 应映射为 major");
-assert(parsed[1].file === "src/b.ts" && parsed[1].line === undefined, "无行号时不该编造行号");
+assert(
+   parsed[1].file === "src/b.ts" && parsed[1].line === undefined,
+   "无行号时不该编造行号",
+);
 const deduped = review.dedupeFindings([...parsed, ...parsed]);
 assert(
    deduped.fresh.length === 2 && deduped.duplicates.length === 2,
@@ -610,11 +622,25 @@ const nit = { severity: "nit", message: "风格", raw: "- [nit] 风格" };
 const round1 = review.planReviewRound({ round: 0, findings: [...parsed, nit] });
 assert(round1.action === "fix" && round1.findings.length === 2, "nit 默认不修");
 assert(round1.findings[0].severity === "blocker", "应按严重度排序");
-const round2 = review.planReviewRound({ round: 1, findings: round1.findings, maxRounds: 2 });
+const round2 = review.planReviewRound({
+   round: 1,
+   findings: round1.findings,
+   maxRounds: 2,
+});
 assert(round2.action === "fix", "未到上限应继续修");
-const round3 = review.planReviewRound({ round: 2, findings: round1.findings, maxRounds: 2 });
-assert(round3.action === "stop" && /上限/.test(round3.reason), "到上限应停下交回队长");
-assert(review.planReviewRound({ round: 0, findings: [] }).action === "stop", "无发现即停");
+const round3 = review.planReviewRound({
+   round: 2,
+   findings: round1.findings,
+   maxRounds: 2,
+});
+assert(
+   round3.action === "stop" && /上限/.test(round3.reason),
+   "到上限应停下交回队长",
+);
+assert(
+   review.planReviewRound({ round: 0, findings: [] }).action === "stop",
+   "无发现即停",
+);
 const brief = review.buildReviewBrief({
    task: "T",
    diff: "diff --git a/x b/x",
@@ -622,9 +648,14 @@ const brief = review.buildReviewBrief({
    base: "HEAD",
 });
 assert(brief.includes("相对 HEAD"), "brief 应写清基线");
-assert(brief.includes("通过冒烟") && brief.includes(review.FINDINGS_FORMAT), "brief 应含验收标准与输出格式");
 assert(
-   review.buildReviewBrief({ task: "T", diff: "x".repeat(50), maxChars: 10 }).includes("已截断"),
+   brief.includes("通过冒烟") && brief.includes(review.FINDINGS_FORMAT),
+   "brief 应含验收标准与输出格式",
+);
+assert(
+   review
+      .buildReviewBrief({ task: "T", diff: "x".repeat(50), maxChars: 10 })
+      .includes("已截断"),
    "超长 diff 应截断并标注",
 );
 ok("复审：findings 解析 / 去重 / 轮次策略 / brief 截断");
@@ -642,9 +673,15 @@ const fixReply = await reviewTool.execute("id", {
    task: "T",
    findingsText: "- [major] src/a.ts:3 — 少了守卫",
 });
-assert(fixReply.content[0].text.includes("只修下面这些复审发现"), "应把发现转成待修任务");
+assert(
+   fixReply.content[0].text.includes("只修下面这些复审发现"),
+   "应把发现转成待修任务",
+);
 assert(fixReply.details.action === "fix", "有待修条目时 action=fix");
-const cleanReply = await reviewTool.execute("id", { task: "T", findingsText: "no findings" });
+const cleanReply = await reviewTool.execute("id", {
+   task: "T",
+   findingsText: "no findings",
+});
 assert(cleanReply.content[0].text.includes("没有待修条目"), "无发现应直接停");
 ok("复审工具：brief / 待修任务 / 无发现即停");
 
@@ -652,7 +689,12 @@ ok("复审工具：brief / 待修任务 / 无发现即停");
 const withAcp = config.validateConfig(
    {
       roles: {
-         orchestrator: { model: "p/a", thinking: "high", mode: "primary", tools: ["*"] },
+         orchestrator: {
+            model: "p/a",
+            thinking: "high",
+            mode: "primary",
+            tools: ["*"],
+         },
       },
       acp: {
          mine: { command: "my-cli", args: ["-p", "{prompt}"] },
@@ -674,20 +716,37 @@ const { formatDoctorReport } = await load("src/tools.ts");
 const doctorText = formatDoctorReport({
    config: withAcp.config,
    aliases,
-   state: { stateVersion: 1, updatedAt: 0, attempts: [], tasks: [], mailbox: [] },
+   state: {
+      stateVersion: 1,
+      updatedAt: 0,
+      attempts: [],
+      tasks: [],
+      mailbox: [],
+   },
    path: "mem",
 });
-assert(doctorText.includes("orchestrator") && doctorText.includes("p/a"), "体检应列出角色与实际模型");
-assert(doctorText.includes("外部引擎") && doctorText.includes("mine=my-cli"), "体检应列出外部引擎");
+assert(
+   doctorText.includes("orchestrator") && doctorText.includes("p/a"),
+   "体检应列出角色与实际模型",
+);
+assert(
+   doctorText.includes("外部引擎") && doctorText.includes("mine=my-cli"),
+   "体检应列出外部引擎",
+);
 assert(doctorText.includes("看板："), "体检应含看板计数");
 ok("体检：角色模型 / 引擎白名单 / 看板计数");
 
 assert(
-   ["staffs_doctor", "staffs_astgrep", "staffs_acp"].every((name) => tools.has(name)),
+   ["staffs_doctor", "staffs_astgrep", "staffs_acp"].every((name) =>
+      tools.has(name),
+   ),
    "应注册体检 / 结构化搜索 / 外部引擎工具",
 );
 const doctorReply = await tools.get("staffs_doctor").execute("id", {});
-assert(doctorReply.content[0].text.includes("配置："), "staffs_doctor 应回体检报告");
+assert(
+   doctorReply.content[0].text.includes("配置："),
+   "staffs_doctor 应回体检报告",
+);
 const unknownEngine = await tools.get("staffs_acp").execute("id", {
    engine: "nope",
    prompt: "hi",
@@ -697,14 +756,23 @@ ok("工具：staffs_doctor 可用，staffs_acp 拒绝白名单外引擎");
 
 assert((await runCommand("board")).length > 0, "/staffs board 应有输出");
 const cmdDoctor = await runCommand("doctor");
-assert(cmdDoctor.includes("档位：") && cmdDoctor.includes("合议："), "/staffs doctor 应回体检");
+assert(
+   cmdDoctor.includes("档位：") && cmdDoctor.includes("合议："),
+   "/staffs doctor 应回体检",
+);
 ok("/staffs：board 与 doctor 子命令");
 
 const statuses = [];
-await hooks.get("turn_end")({}, {
-   hasUI: true,
-   ui: { notify: () => {}, setStatus: (key, value) => statuses.push([key, value]) },
-});
+await hooks.get("turn_end")(
+   {},
+   {
+      hasUI: true,
+      ui: {
+         notify: () => {},
+         setStatus: (key, value) => statuses.push([key, value]),
+      },
+   },
+);
 assert(
    statuses.length === 1 && statuses[0][0] === "pi-staffs",
    `turn_end 应写 footer 状态行，实际 ${JSON.stringify(statuses)}`,
@@ -726,7 +794,10 @@ installEnv(knobAgents);
 const knobStaffs = evaluatePrelude(knobPrelude);
 const knobRole = Object.keys(knobConfig.roles)[0];
 const knobRun = await knobStaffs.run({ role: knobRole, task: "T" });
-assert(knobRun.ok === false && knobRun.kind === "admission", "maxRetries=1 仍应如实上报准入失败");
+assert(
+   knobRun.ok === false && knobRun.kind === "admission",
+   "maxRetries=1 仍应如实上报准入失败",
+);
 assert(
    knobAgents.calls.length === 2,
    `maxRetries=1 应为 2 次尝试，实际 ${knobAgents.calls.length}`,
@@ -752,13 +823,17 @@ for (const name of [
    "verification-planning",
    "worktrees",
 ])
-   assert(skillList.some((skill) => skill.name === name), `缺少技能 ${name}`);
+   assert(
+      skillList.some((skill) => skill.name === name),
+      `缺少技能 ${name}`,
+   );
 const skillText = await runCommand("skills");
 assert(skillText.includes("deepwork"), "/staffs skills 应列出技能");
 const syncTarget = path.join(sandbox, "skills");
 const synced = skillsMod.syncStaffsSkills(syncTarget);
 assert(
-   synced.copied.length === 9 && existsSync(path.join(syncTarget, "deepwork", "SKILL.md")),
+   synced.copied.length === 9 &&
+      existsSync(path.join(syncTarget, "deepwork", "SKILL.md")),
    "同步应把全部 SKILL.md 复制到目标目录",
 );
 ok("技能：9 个随包技能可列出、可同步");
@@ -768,15 +843,37 @@ const stateMod = await load("src/state.ts");
 const team = stateMod.emptyState(1_000);
 stateMod.addTask(team, { id: "t-1", title: "造工具", role: "fixer" }, 1_000);
 stateMod.addTask(team, { id: "t-2", title: "接工具", deps: ["t-1"] }, 1_000);
-assert(stateMod.readyTasks(team).map((t) => t.id).join(",") === "t-1", "有依赖的任务不该进就绪集");
+assert(
+   stateMod
+      .readyTasks(team)
+      .map((t) => t.id)
+      .join(",") === "t-1",
+   "有依赖的任务不该进就绪集",
+);
 stateMod.claimTask(team, "t-1", "att-1", 1_000);
 assert(stateMod.readyTasks(team).length === 0, "进行中的任务不该再进就绪集");
 stateMod.finishTask(team, "t-1", "done", 1_000);
-assert(stateMod.readyTasks(team).map((t) => t.id).join(",") === "t-2", "前置完成后下游才就绪");
+assert(
+   stateMod
+      .readyTasks(team)
+      .map((t) => t.id)
+      .join(",") === "t-2",
+   "前置完成后下游才就绪",
+);
 assert(stateMod.formatBoard(team).includes("t-2"), "看板应列出任务");
-stateMod.sendMail(team, { from: "fixer", to: "orchestrator", text: "干完了" }, 1_000);
-assert(stateMod.takeMail(team, "orchestrator").length === 1, "信箱应能取到消息");
-assert(stateMod.takeMail(team, "orchestrator").length === 0, "已读消息不该重放");
+stateMod.sendMail(
+   team,
+   { from: "fixer", to: "orchestrator", text: "干完了" },
+   1_000,
+);
+assert(
+   stateMod.takeMail(team, "orchestrator").length === 1,
+   "信箱应能取到消息",
+);
+assert(
+   stateMod.takeMail(team, "orchestrator").length === 0,
+   "已读消息不该重放",
+);
 const stateFile = path.join(sandbox, "state.json");
 stateMod.writeState(team, stateFile);
 assert(stateMod.readState(stateFile).tasks.length === 2, "状态应能落盘再读回");
@@ -786,20 +883,42 @@ ok("状态机：依赖门控 / 句柄认领 / 信箱已读 / 落盘回读");
 const trackerMod = await load("src/tracker.ts");
 const issuesDir = path.join(sandbox, "issues");
 mkdirSync(issuesDir, { recursive: true });
-writeFileSync(path.join(issuesDir, "07-a.md"), "---\ntitle: 甲\ndeps: [06-x]\n---\n正文\n");
-writeFileSync(path.join(issuesDir, "08-b.md"), "---\ntitle: 乙\nstatus: done\n---\n做完的\n");
+writeFileSync(
+   path.join(issuesDir, "07-a.md"),
+   "---\ntitle: 甲\ndeps: [06-x]\n---\n正文\n",
+);
+writeFileSync(
+   path.join(issuesDir, "08-b.md"),
+   "---\ntitle: 乙\nstatus: done\n---\n做完的\n",
+);
 const imported = stateMod.emptyState(1_000);
 const markdownTracker = trackerMod.localMarkdownTracker(issuesDir);
-const firstImport = await trackerMod.importCandidates(imported, markdownTracker, 1_000);
-const secondImport = await trackerMod.importCandidates(imported, markdownTracker, 1_000);
+const firstImport = await trackerMod.importCandidates(
+   imported,
+   markdownTracker,
+   1_000,
+);
+const secondImport = await trackerMod.importCandidates(
+   imported,
+   markdownTracker,
+   1_000,
+);
 assert(firstImport.map((t) => t.id).join(",") === "07-a", "只应导入未关闭的票");
 assert(secondImport.length === 0, "重复导入必须幂等");
 ok("tracker：local-markdown 导入未关闭票且幂等");
 
 // ---------- 15. 合议（票 07/17） ----------
-const councilAliases = { "alias-fixer": "q/heavy-fixer", "alias-oracle": "q/oracle" };
+const councilAliases = {
+   "alias-fixer": "q/heavy-fixer",
+   "alias-oracle": "q/oracle",
+};
 const councilCfg = config.validateConfig(
-   { council: { members: ["alias-fixer", "alias-oracle"], synth: "alias-fixer" } },
+   {
+      council: {
+         members: ["alias-fixer", "alias-oracle"],
+         synth: "alias-fixer",
+      },
+   },
    councilAliases,
 ).config;
 const councilStaffs = evaluatePrelude(
@@ -817,20 +936,25 @@ assert(
    `合议应并行跑满成员：${JSON.stringify(council.members)}`,
 );
 assert(
-   council.members.map((member) => member.model).join(",") === "q/heavy-fixer,q/oracle",
+   council.members.map((member) => member.model).join(",") ===
+      "q/heavy-fixer,q/oracle",
    "成员模型应由宿主解析成最终引用",
 );
 assert(council.synthesis?.answer === "done", "有 synth 时应给出合成答案");
 const synthCall = councilAgents.calls[councilAgents.calls.length - 1];
 assert(
-   synthCall.task.includes("## q/heavy-fixer") && synthCall.task.includes("## q/oracle"),
+   synthCall.task.includes("## q/heavy-fixer") &&
+      synthCall.task.includes("## q/oracle"),
    "合成输入应带上各成员答案",
 );
 try {
    await councilStaffs.council({ task: "x", models: ["q/only"] });
    throw new Error("预期合议报错");
 } catch (error) {
-   assert(/至少需要 2 个模型/.test(String(error.message)), `成员不足应报错：${error.message}`);
+   assert(
+      /至少需要 2 个模型/.test(String(error.message)),
+      `成员不足应报错：${error.message}`,
+   );
 }
 ok("合议：成员并行 + 合成答案 + 成员不足时报错");
 
@@ -866,7 +990,10 @@ assert(
    agentsMd.split("<!-- pi-staffs:begin -->").length === 2,
    "重复注入应替换同一块，而不是叠加",
 );
-assert(installDeps(worktree).includes("无 package.json"), "没有 package.json 时应跳过依赖安装");
+assert(
+   installDeps(worktree).includes("无 package.json"),
+   "没有 package.json 时应跳过依赖安装",
+);
 const hooksMod = await load("src/hooks.ts");
 assert(
    buildStaffsPrelude({
@@ -903,8 +1030,22 @@ const obsState = {
       mkAttempt({ id: "a3", phase: "awaiting", heartbeatAt: obsNow - 200_000 }),
    ],
    mailbox: [
-      { id: "m1", from: "orchestrator", to: "fixer", text: "x", at: obsNow, read: false },
-      { id: "m2", from: "orchestrator", to: "*", text: "y", at: obsNow, read: true },
+      {
+         id: "m1",
+         from: "orchestrator",
+         to: "fixer",
+         text: "x",
+         at: obsNow,
+         read: false,
+      },
+      {
+         id: "m2",
+         from: "orchestrator",
+         to: "*",
+         text: "y",
+         at: obsNow,
+         read: true,
+      },
    ],
 };
 assert(
@@ -916,16 +1057,24 @@ assert(
    "空状态必须清掉状态行（返回 undefined）",
 );
 const panelLines = stateMod.formatPanel(obsState, { now: obsNow });
-assert(panelLines.some((line) => line.includes("[running]")), "面板要显示 attempt 相位");
-assert(panelLines.some((line) => line.includes("疑似卡住")), "面板要与看门狗同阈值标出 stale");
 assert(
-   stateMod.formatPanel(stateMod.emptyState(obsNow), { now: obsNow }).length === 0,
+   panelLines.some((line) => line.includes("[running]")),
+   "面板要显示 attempt 相位",
+);
+assert(
+   panelLines.some((line) => line.includes("疑似卡住")),
+   "面板要与看门狗同阈值标出 stale",
+);
+assert(
+   stateMod.formatPanel(stateMod.emptyState(obsNow), { now: obsNow }).length ===
+      0,
    "空态面板应为空数组（空面板不占屏幕）",
 );
 ok("观测层：footer 按相位统计、面板带相位与 stale 标记");
 
 // ---------- 19. 面试稿 frontmatter 往返 + ast-grep 参数（票 16/17） ----------
-const { formatInterview, parseInterview, astGrepArgs } = await load("src/tools.ts");
+const { formatInterview, parseInterview, astGrepArgs } =
+   await load("src/tools.ts");
 const interviewDoc = {
    topic: "派发韧性",
    createdAt: "2026-01-01T00:00:00.000Z",
@@ -937,42 +1086,64 @@ const interviewDoc = {
 };
 const roundtrip = parseInterview(formatInterview(interviewDoc));
 assert(
-   roundtrip && roundtrip.topic === interviewDoc.topic && roundtrip.status === "in-progress",
+   roundtrip &&
+      roundtrip.topic === interviewDoc.topic &&
+      roundtrip.status === "in-progress",
    "面试稿要能被 parser 读回（含 frontmatter 与状态）",
 );
 assert(
-   roundtrip.items.length === 2 && roundtrip.items[0].answer === "同模型退避重试",
+   roundtrip.items.length === 2 &&
+      roundtrip.items[0].answer === "同模型退避重试",
    `Q&A 历史要按序读回，实际 ${JSON.stringify(roundtrip.items)}`,
 );
-assert(parseInterview("# 别的 markdown\n") === undefined, "没有 frontmatter 的稿子应当作新稿处理");
-const replaceArgs = astGrepArgs({ pattern: "foo($A)", lang: "ts", rewrite: "bar($A)", path: "src" });
+assert(
+   parseInterview("# 别的 markdown\n") === undefined,
+   "没有 frontmatter 的稿子应当作新稿处理",
+);
+const replaceArgs = astGrepArgs({
+   pattern: "foo($A)",
+   lang: "ts",
+   rewrite: "bar($A)",
+   path: "src",
+});
 assert(
    replaceArgs.includes("--rewrite") && replaceArgs.includes("--update-all"),
    "给了 rewrite 才带替换参数",
 );
-assert(!astGrepArgs({ pattern: "foo" }).includes("--update-all"), "只搜不换绝不能改盘");
+assert(
+   !astGrepArgs({ pattern: "foo" }).includes("--update-all"),
+   "只搜不换绝不能改盘",
+);
 ok("面试稿：frontmatter 往返可读回；ast-grep：只搜不换不动盘");
 
 // ---------- 20. 观测层开关 + 包清单 + 钩子不抹状态（发版回归钉） ----------
 assert(config.defaultStaffsConfig().panel === "footer", "默认观测层是 footer");
 assert(
-   config.validateConfig({ ...good.config, panel: "nope" }, aliases).config.panel === "footer",
+   config.validateConfig({ ...good.config, panel: "nope" }, aliases).config
+      .panel === "footer",
    "非法观测层形态退回 footer",
 );
 assert(
-   config.validateConfig({ ...good.config, panel: "widget" }, aliases).config.panel === "widget",
+   config.validateConfig({ ...good.config, panel: "widget" }, aliases).config
+      .panel === "widget",
    "合法观测层形态要保留",
 );
-const manifest = JSON.parse(readFileSync(path.join(repo, "package.json"), "utf8"));
+const manifest = JSON.parse(
+   readFileSync(path.join(repo, "package.json"), "utf8"),
+);
 assert(
-   manifest.pi.skills?.includes("./skills") && manifest.pi.prompts?.includes("./prompts"),
+   manifest.pi.skills?.includes("./skills") &&
+      manifest.pi.prompts?.includes("./prompts"),
    "有 pi manifest 时不再自动发现：skills/prompts 必须显式声明",
 );
 assert(
    manifest.files.includes("skills/") && manifest.files.includes("prompts/"),
    "files 必须带上 skills/prompts，否则发出去的包会丢技能与角色提示词",
 );
-assert(manifest.peerDependencies?.typebox === "*", "typebox 由 pi 提供，必须声明为 peer");
+assert(
+   manifest.peerDependencies?.typebox === "*",
+   "typebox 由 pi 提供，必须声明为 peer",
+);
 ok("清单：skills/prompts 显式声明且随包发布；观测层非法值有兜底");
 
 // 钩子不许把注册期的陈旧快照写回去：那会抹掉工具刚写的任务（最难查的一类数据丢失）。
@@ -985,7 +1156,15 @@ hooksMod.registerStaffsHooks(
 stateMod.writeState(
    {
       ...stateMod.emptyState(obsNow),
-      tasks: [{ id: "t1", title: "别把我抹掉", deps: [], status: "running", updatedAt: obsNow }],
+      tasks: [
+         {
+            id: "t1",
+            title: "别把我抹掉",
+            deps: [],
+            status: "running",
+            updatedAt: obsNow,
+         },
+      ],
    },
    hookPath,
 );

@@ -96,7 +96,11 @@ export const extractReceipts = (text: string): Receipt[] => {
       if (!slice) continue;
       try {
          const parsed = JSON.parse(slice) as Receipt;
-         if (parsed && typeof parsed === "object" && Array.isArray(parsed.attempts))
+         if (
+            parsed &&
+            typeof parsed === "object" &&
+            Array.isArray(parsed.attempts)
+         )
             receipts.push(parsed);
       } catch {
          // 半截 JSON（输出被截断）不是错误：跳过这一条，别打断主流程。
@@ -134,7 +138,14 @@ export const recordReceipts = (
          const attemptRole = String(entry.role ?? role ?? "unknown");
          const model = String(entry.model ?? receipt.model ?? "");
          const id =
-            entry.id ?? attemptRole + ":" + model + ":" + (entry.at ?? now) + ":" + (entry.attempt ?? 1);
+            entry.id ??
+            attemptRole +
+               ":" +
+               model +
+               ":" +
+               (entry.at ?? now) +
+               ":" +
+               (entry.attempt ?? 1);
          upsertAttempt(
             state,
             {

@@ -197,7 +197,10 @@ async function __staffsRun(deps) {
       ? Math.max(1, Math.floor(maxRetries) + 1)
       : Math.max(1, Math.floor(Number(policy.attemptsPerModel) || 2));
    // D26：这两个是**下限**等待，真正的等待仍取「退避 / 类别地板 / Retry-After / 它」的最大值。
-   const initialRetryDelayMs = Math.max(0, Number(policy.initialRetryDelayMs) || 0);
+   const initialRetryDelayMs = Math.max(
+      0,
+      Number(policy.initialRetryDelayMs) || 0,
+   );
    const retryDelayMs = Math.max(0, Number(policy.retryDelayMs) || 0);
    const backoffBaseMs = Math.max(1, Number(policy.backoffBaseMs) || 1500);
    const backoffCapMs = Math.max(
@@ -241,7 +244,13 @@ async function __staffsRun(deps) {
       });
       if (ok) {
          return deps.spawn === true
-            ? { ok: true, model, attempts, handle: result, marker: __STAFFS_MARKER }
+            ? {
+                 ok: true,
+                 model,
+                 attempts,
+                 handle: result,
+                 marker: __STAFFS_MARKER,
+              }
             : { ok: true, model, attempts, result, marker: __STAFFS_MARKER };
       }
       lastError = text;
@@ -292,7 +301,9 @@ function __staffsText(result) {
       if (Array.isArray(value)) {
          const joined = value
             .map((part) =>
-               typeof part === "string" ? part : String((part && part.text) || ""),
+               typeof part === "string"
+                  ? part
+                  : String((part && part.text) || ""),
             )
             .join("");
          if (joined.trim()) return joined;
@@ -304,13 +315,27 @@ function __staffsText(result) {
 /** 抠出 token 用量（有就记账，没有就 0——不猜）。
  * @param {any} result @returns {{ in: number; out: number; total: number }} */
 function __staffsUsage(result) {
-   const usage = result && typeof result === "object" ? result.usage || result.tokens : undefined;
+   const usage =
+      result && typeof result === "object"
+         ? result.usage || result.tokens
+         : undefined;
    /** @param {unknown} value @returns {number} */
    const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
    if (!usage || typeof usage !== "object") return { in: 0, out: 0, total: 0 };
-   const input = num(usage.input ?? usage.prompt ?? usage.inputTokens ?? usage.promptTokens);
-   const output = num(usage.output ?? usage.completion ?? usage.outputTokens ?? usage.completionTokens);
-   return { in: input, out: output, total: num(usage.total ?? usage.totalTokens) || input + output };
+   const input = num(
+      usage.input ?? usage.prompt ?? usage.inputTokens ?? usage.promptTokens,
+   );
+   const output = num(
+      usage.output ??
+         usage.completion ??
+         usage.outputTokens ??
+         usage.completionTokens,
+   );
+   return {
+      in: input,
+      out: output,
+      total: num(usage.total ?? usage.totalTokens) || input + output,
+   };
 }
 
 /**
@@ -324,9 +349,14 @@ async function __staffsCouncil(deps) {
    const host = (deps && deps.host) || {};
    const agents = host.agents;
    if (!agents || typeof agents.run !== "function")
-      throw new Error("Pi-Staffs 合议需要 Fabric 的 agents API：请在 fabric_exec 里运行");
+      throw new Error(
+         "Pi-Staffs 合议需要 Fabric 的 agents API：请在 fabric_exec 里运行",
+      );
    const members = Array.isArray(deps.models)
-      ? deps.models.filter((/** @type {unknown} */ model) => typeof model === "string" && model.trim())
+      ? deps.models.filter(
+           (/** @type {unknown} */ model) =>
+              typeof model === "string" && model.trim(),
+        )
       : [];
    if (members.length < 2)
       throw new Error(
@@ -362,12 +392,23 @@ async function __staffsCouncil(deps) {
       { in: 0, out: 0, total: 0 },
    );
    const budget = Number(deps.budgetTokens);
-   const overBudget = Number.isFinite(budget) && budget > 0 && totals.total >= budget;
+   const overBudget =
+      Number.isFinite(budget) && budget > 0 && totals.total >= budget;
    const usable = settled.filter((member) => member.ok && member.answer);
    if (!usable.length)
-      return { ok: false, members: settled, usage: totals, error: "所有合议模型都失败了" };
+      return {
+         ok: false,
+         members: settled,
+         usage: totals,
+         error: "所有合议模型都失败了",
+      };
    if (!deps.synthModel || overBudget)
-      return { ok: true, members: settled, usage: totals, budgetExceeded: overBudget };
+      return {
+         ok: true,
+         members: settled,
+         usage: totals,
+         budgetExceeded: overBudget,
+      };
    const digest = usable
       .map((member) => "## " + member.model + "\n" + member.answer)
       .join("\n\n");
@@ -398,7 +439,15 @@ async function __staffsCouncil(deps) {
  * 所以 status/list/stop/steer/resume/wait 做成 guest 函数——不是偷懒，是唯一可达通道。
  * 方法名逐一对齐 fabric 的 agents API，缺哪个就报哪个，不静默降级。
  */
-const __staffsTaskOps = ["status", "list", "stop", "steer", "resume", "wait", "compact"];
+const __staffsTaskOps = [
+   "status",
+   "list",
+   "stop",
+   "steer",
+   "resume",
+   "wait",
+   "compact",
+];
 
 /** @param {StaffsHost} host @param {unknown} op @param {unknown[]} args @returns {Promise<any>} */
 async function __staffsTaskCall(host, op, args) {
@@ -406,10 +455,16 @@ async function __staffsTaskCall(host, op, args) {
    const name = String(op || "");
    if (!__staffsTaskOps.includes(name))
       throw new Error(
-         "Unknown Pi-Staffs task op: " + name + "（可用：" + __staffsTaskOps.join(", ") + "）",
+         "Unknown Pi-Staffs task op: " +
+            name +
+            "（可用：" +
+            __staffsTaskOps.join(", ") +
+            "）",
       );
    if (!agents || typeof agents[name] !== "function")
-      throw new Error("当前 Fabric 的 agents API 没有 " + name + "()，该操作不可用");
+      throw new Error(
+         "当前 Fabric 的 agents API 没有 " + name + "()，该操作不可用",
+      );
    return agents[name].apply(agents, Array.isArray(args) ? args : []);
 }
 
@@ -429,11 +484,17 @@ async function __staffsRevive(host, request, dispatch) {
       try {
          status = await agents.status(id);
       } catch (error) {
-         status = { error: error instanceof Error ? error.message : String(error) };
+         status = {
+            error: error instanceof Error ? error.message : String(error),
+         };
       }
    }
    const state = String((status && (status.state || status.status)) || "");
-   const dead = state === "failed" || state === "error" || state === "cancelled" || !!status?.error;
+   const dead =
+      state === "failed" ||
+      state === "error" ||
+      state === "cancelled" ||
+      !!status?.error;
    if (!dead) return { revived: false, state: state || "unknown", status };
    const task =
       typeof input.task === "string" && input.task.trim()
@@ -444,7 +505,13 @@ async function __staffsRevive(host, request, dispatch) {
          "Pi-Staffs revive 缺少任务文本：句柄状态里没有 task，请显式传 task",
       );
    const fresh = await dispatch({ role: input.role, task }, true);
-   return { revived: true, previous: id, state: state || "unknown", handle: fresh.handle, attempts: fresh.attempts };
+   return {
+      revived: true,
+      previous: id,
+      state: state || "unknown",
+      handle: fresh.handle,
+      attempts: fresh.attempts,
+   };
 }
 
 /**

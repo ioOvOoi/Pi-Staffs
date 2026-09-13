@@ -27,8 +27,17 @@ import {
    type StaffsState,
    type TaskStatus,
 } from "./state.ts";
-import { createTracker, importCandidates, type TrackerKind } from "./tracker.ts";
-import { buildReviewBrief, formatFindingTasks, parseFindings, planReviewRound } from "./review.ts";
+import {
+   createTracker,
+   importCandidates,
+   type TrackerKind,
+} from "./tracker.ts";
+import {
+   buildReviewBrief,
+   formatFindingTasks,
+   parseFindings,
+   planReviewRound,
+} from "./review.ts";
 import {
    activePresetName,
    fabricConfigPath,
@@ -45,12 +54,19 @@ type ToolReply = {
    details: Record<string, unknown>;
 };
 
-const reply = (text: string, details: Record<string, unknown> = {}): ToolReply => ({
+const reply = (
+   text: string,
+   details: Record<string, unknown> = {},
+): ToolReply => ({
    content: [{ type: "text", text }],
    details,
 });
 
-export type TrackerSpec = { kind: TrackerKind; repo?: string; directory?: string };
+export type TrackerSpec = {
+   kind: TrackerKind;
+   repo?: string;
+   directory?: string;
+};
 
 export type ToolDeps = {
    statePath?: string;
@@ -76,7 +92,11 @@ const AGENTS_BEGIN = "<!-- pi-staffs:begin -->";
 const AGENTS_END = "<!-- pi-staffs:end -->";
 
 const git = (cwd: string, args: string[]): string =>
-   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+   execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+   }).trim();
 
 /**
  * 给 worktree 注入 AGENTS.md 块（票 18）。
@@ -90,15 +110,20 @@ export const injectAgentsBlock = (directory: string, block: string): string => {
    const wrapped = AGENTS_BEGIN + "\n" + block.trim() + "\n" + AGENTS_END;
    const next =
       start >= 0 && end > start
-         ? existing.slice(0, start) + wrapped + existing.slice(end + AGENTS_END.length)
-         : (existing.trim() ? existing.trimEnd() + "\n\n" : "") + wrapped + "\n";
+         ? existing.slice(0, start) +
+           wrapped +
+           existing.slice(end + AGENTS_END.length)
+         : (existing.trim() ? existing.trimEnd() + "\n\n" : "") +
+           wrapped +
+           "\n";
    writeFileSync(path, next);
    return path;
 };
 
 /** 依赖克隆/安装（票 18 的 clonedeps）：只在真有 package.json 时动手，失败不致命。 */
 export const installDeps = (directory: string): string => {
-   if (!existsSync(join(directory, "package.json"))) return "无 package.json，跳过依赖安装";
+   if (!existsSync(join(directory, "package.json")))
+      return "无 package.json，跳过依赖安装";
    try {
       execFileSync("npm", ["install", "--no-audit", "--no-fund"], {
          cwd: directory,
@@ -108,7 +133,10 @@ export const installDeps = (directory: string): string => {
       });
       return "依赖已安装（npm install）";
    } catch (error) {
-      return "依赖安装失败（不阻塞）：" + (error instanceof Error ? error.message.slice(0, 200) : String(error));
+      return (
+         "依赖安装失败（不阻塞）：" +
+         (error instanceof Error ? error.message.slice(0, 200) : String(error))
+      );
    }
 };
 
@@ -138,7 +166,11 @@ const runCli = (
                   : error
                     ? 1
                     : 0;
-            resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+            resolve({
+               code,
+               stdout: String(stdout ?? ""),
+               stderr: String(stderr ?? ""),
+            });
          },
       );
       if (options.input !== undefined) child.stdin?.end(options.input);
@@ -167,8 +199,15 @@ export const formatDoctorReport = (input: DoctorInput): string => {
       }
       const resolved = resolveModelRef(role.model, aliases);
       const permissions =
-         (role as { permissions?: { allow?: string[]; ask?: string[]; deny?: string[] } })
-            .permissions ?? {};
+         (
+            role as {
+               permissions?: {
+                  allow?: string[];
+                  ask?: string[];
+                  deny?: string[];
+               };
+            }
+         ).permissions ?? {};
       lines.push(
          `${role.enabled === false ? "⏸" : "✓"} ${name}: ${resolved ? resolved.ref : "别名解析失败 → " + String(role.model)}` +
             ` · thinking ${role.thinking} · ${role.mode} · tools ${(role.tools ?? []).join(",") || "-"}` +
@@ -177,7 +216,11 @@ export const formatDoctorReport = (input: DoctorInput): string => {
    }
    lines.push(
       `合议：${resolveCouncilModels(config, aliases).join(", ") || "（空：staffs.council 会直接拒绝，先配 council.members）"}`,
-      `外部引擎：${Object.entries(config.acp ?? {}).map(([name, engine]) => name + "=" + engine.command).join(", ") || "（空）"}`,
+      `外部引擎：${
+         Object.entries(config.acp ?? {})
+            .map(([name, engine]) => name + "=" + engine.command)
+            .join(", ") || "（空）"
+      }`,
       `tracker：${config.tracker.kind}${config.tracker.directory ? " → " + config.tracker.directory : ""}${config.tracker.repo ? " → " + config.tracker.repo : ""}`,
       `看板：派发 ${state.attempts.length} 条｜任务 ${state.tasks.length}（就绪 ${readyTasks(state).length}）｜信箱未读 ${state.mailbox.filter((message) => !message.read).length} 条`,
    );
@@ -185,7 +228,10 @@ export const formatDoctorReport = (input: DoctorInput): string => {
    return lines.join("\n");
 };
 
-export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void => {
+export const registerStaffsTools = (
+   pi: ExtensionAPI,
+   deps: ToolDeps = {},
+): void => {
    const path = deps.statePath;
    const cwd = deps.cwd ?? process.cwd();
    const currentStatePath = (): string => path ?? statePath(cwd);
@@ -193,15 +239,19 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_board",
       label: "Staffs Board",
-      description: "查看 Pi-Staffs 团队状态：运行中的派发、任务 DAG 就绪集、信箱未读。",
+      description:
+         "查看 Pi-Staffs 团队状态：运行中的派发、任务 DAG 就绪集、信箱未读。",
       parameters: Type.Object({ maxTasks: Type.Optional(Type.Number()) }),
       async execute(_id, params) {
          const state = readState(currentStatePath());
          const board = formatBoard(state, { maxTasks: params.maxTasks ?? 12 });
-         return reply(board || "（团队空闲：没有进行中的派发，也没有未完成任务）", {
-            attempts: state.attempts.length,
-            tasks: state.tasks.length,
-         });
+         return reply(
+            board || "（团队空闲：没有进行中的派发，也没有未完成任务）",
+            {
+               attempts: state.attempts.length,
+               tasks: state.tasks.length,
+            },
+         );
       },
    });
 
@@ -229,7 +279,9 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             [
                "目标：" + (session.goal ?? "（未设置）"),
                "验收标准：",
-               ...(session.criteria?.length ? session.criteria.map((item) => "- " + item) : ["（未设置）"]),
+               ...(session.criteria?.length
+                  ? session.criteria.map((item) => "- " + item)
+                  : ["（未设置）"]),
             ].join("\n"),
             { session },
          );
@@ -239,7 +291,8 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_task",
       label: "Staffs Task",
-      description: "团队任务 DAG：add / list / ready / claim / finish（依赖未完成前不可领取）。",
+      description:
+         "团队任务 DAG：add / list / ready / claim / finish（依赖未完成前不可领取）。",
       parameters: Type.Object({
          op: Type.Union([
             Type.Literal("add"),
@@ -261,29 +314,47 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
                if (!params.title) throw new Error("staffs_task add 需要 title");
                return addTask(
                   state,
-                  { id: params.id, title: params.title, role: params.role, deps: params.deps },
+                  {
+                     id: params.id,
+                     title: params.title,
+                     role: params.role,
+                     deps: params.deps,
+                  },
                   now,
                );
             }
             if (params.op === "claim") {
                if (!params.id) throw new Error("staffs_task claim 需要 id");
-               return claimTask(state, params.id, params.attemptId ?? "manual", now);
+               return claimTask(
+                  state,
+                  params.id,
+                  params.attemptId ?? "manual",
+                  now,
+               );
             }
             if (params.op === "finish") {
                if (!params.id) throw new Error("staffs_task finish 需要 id");
-               return finishTask(state, params.id, (params.status ?? "done") as TaskStatus, now);
+               return finishTask(
+                  state,
+                  params.id,
+                  (params.status ?? "done") as TaskStatus,
+                  now,
+               );
             }
             if (params.op === "ready") return readyTasks(state);
             return state.tasks;
          });
-         return reply(JSON.stringify(value, null, 2), { count: Array.isArray(value) ? value.length : 1 });
+         return reply(JSON.stringify(value, null, 2), {
+            count: Array.isArray(value) ? value.length : 1,
+         });
       },
    });
 
    pi.registerTool({
       name: "staffs_mail",
       label: "Staffs Mail",
-      description: "团队信箱：send 投递、inbox 取未读（成员之间不必经过队长中转）。",
+      description:
+         "团队信箱：send 投递、inbox 取未读（成员之间不必经过队长中转）。",
       parameters: Type.Object({
          op: Type.Union([Type.Literal("send"), Type.Literal("inbox")]),
          from: Type.Optional(Type.String()),
@@ -297,11 +368,17 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
                if (!params.text) throw new Error("staffs_mail send 需要 text");
                return sendMail(
                   state,
-                  { from: params.from ?? "orchestrator", to: params.to ?? "*", text: params.text },
+                  {
+                     from: params.from ?? "orchestrator",
+                     to: params.to ?? "*",
+                     text: params.text,
+                  },
                   now,
                );
             }
-            return takeMail(state, params.to ?? "orchestrator", { all: params.all === true });
+            return takeMail(state, params.to ?? "orchestrator", {
+               all: params.all === true,
+            });
          });
          const list = Array.isArray(value) ? value : [value];
          return reply(
@@ -310,7 +387,12 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
                     .map((message) =>
                        typeof message === "string"
                           ? message
-                          : "[" + message.from + " → " + message.to + "] " + message.text,
+                          : "[" +
+                            message.from +
+                            " → " +
+                            message.to +
+                            "] " +
+                            message.text,
                     )
                     .join("\n")
                : "（无新消息）",
@@ -322,15 +404,21 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_ticket",
       label: "Staffs Ticket",
-      description: "tracker 适配器：list 就绪候选、import 到团队 DAG、close 回写状态（Symphony §11）。",
+      description:
+         "tracker 适配器：list 就绪候选、import 到团队 DAG、close 回写状态（Symphony §11）。",
       parameters: Type.Object({
-         op: Type.Union([Type.Literal("list"), Type.Literal("import"), Type.Literal("close")]),
+         op: Type.Union([
+            Type.Literal("list"),
+            Type.Literal("import"),
+            Type.Literal("close"),
+         ]),
          id: Type.Optional(Type.String()),
          status: Type.Optional(Type.String()),
          note: Type.Optional(Type.String()),
       }),
       async execute(_id, params) {
-         const spec = typeof deps.tracker === "function" ? deps.tracker() : deps.tracker;
+         const spec =
+            typeof deps.tracker === "function" ? deps.tracker() : deps.tracker;
          const adapter = createTracker(spec?.kind ?? "local-markdown", {
             repo: spec?.repo,
             directory: spec?.directory,
@@ -340,7 +428,9 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             const candidates = await adapter.listCandidates();
             return reply(
                candidates.length
-                  ? candidates.map((item) => item.id + " — " + item.title).join("\n")
+                  ? candidates
+                       .map((item) => item.id + " — " + item.title)
+                       .join("\n")
                   : "（没有就绪候选）",
                { count: candidates.length },
             );
@@ -349,30 +439,45 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             const added = await importCandidates(state, adapter);
             writeState(state, currentStatePath());
             return reply(
-               added.length ? "已导入：" + added.map((task) => task.id).join(", ") : "（已是最新，无需导入）",
+               added.length
+                  ? "已导入：" + added.map((task) => task.id).join(", ")
+                  : "（已是最新，无需导入）",
                { added: added.length },
             );
          }
          if (!params.id) throw new Error("staffs_ticket close 需要 id");
-         await adapter.writeState(params.id, (params.status ?? "done") as TaskStatus, params.note);
-         return reply("已回写 " + params.id + " → " + (params.status ?? "done"));
+         await adapter.writeState(
+            params.id,
+            (params.status ?? "done") as TaskStatus,
+            params.note,
+         );
+         return reply(
+            "已回写 " + params.id + " → " + (params.status ?? "done"),
+         );
       },
    });
 
    pi.registerTool({
       name: "staffs_record",
       label: "Staffs Record",
-      description: "把派发回执（含 attempts 的 JSON）落进看板；手动回报时用它。",
-      parameters: Type.Object({ payload: Type.String({ description: "含 pi-staffs 回执的 JSON 文本" }) }),
+      description:
+         "把派发回执（含 attempts 的 JSON）落进看板；手动回报时用它。",
+      parameters: Type.Object({
+         payload: Type.String({ description: "含 pi-staffs 回执的 JSON 文本" }),
+      }),
       async execute(_id, params) {
          const receipts = extractReceipts(params.payload);
          if (!receipts.length) {
             const parsed = recoverJson(params.payload);
             if (parsed && typeof parsed === "object") {
-               const outcome = recordReceipts([parsed as never], { path: currentStatePath() });
+               const outcome = recordReceipts([parsed as never], {
+                  path: currentStatePath(),
+               });
                return reply("已记录 " + outcome.recorded + " 次尝试", outcome);
             }
-            return reply("没找到 Pi-Staffs 回执：请传 guest 返回的原始 JSON", { recorded: 0 });
+            return reply("没找到 Pi-Staffs 回执：请传 guest 返回的原始 JSON", {
+               recorded: 0,
+            });
          }
          const outcome = recordReceipts(receipts, { path: currentStatePath() });
          return reply("已记录 " + outcome.recorded + " 次尝试", { ...outcome });
@@ -388,13 +493,21 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
          options: Type.Optional(Type.Array(Type.String())),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
-         if (!ctx.hasUI || !ctx.ui) return reply("当前没有交互界面，无法弹窗。请把这句直接问用户：\n" + params.question);
+         if (!ctx.hasUI || !ctx.ui)
+            return reply(
+               "当前没有交互界面，无法弹窗。请把这句直接问用户：\n" +
+                  params.question,
+            );
          if (params.options?.length) {
             const picked = await ctx.ui.select(params.question, params.options);
-            return reply(picked ? "用户选择：" + picked : "用户未选择（可能取消了弹窗）");
+            return reply(
+               picked ? "用户选择：" + picked : "用户未选择（可能取消了弹窗）",
+            );
          }
          const answer = await ctx.ui.input(params.question);
-         return reply(answer ? "用户回答：" + answer : "用户未回答（可能取消了弹窗）");
+         return reply(
+            answer ? "用户回答：" + answer : "用户未回答（可能取消了弹窗）",
+         );
       },
    });
 
@@ -418,7 +531,11 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             .replace(/\s+/g, " ")
             .trim();
          return reply(
-            "HTTP " + response.status + " — " + text.slice(0, limit) + (text.length > limit ? " …（已截断）" : ""),
+            "HTTP " +
+               response.status +
+               " — " +
+               text.slice(0, limit) +
+               (text.length > limit ? " …（已截断）" : ""),
             { status: response.status, length: text.length },
          );
       },
@@ -427,9 +544,14 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_worktree",
       label: "Staffs Worktree",
-      description: "并行写隔离：git worktree 建/列/删，建时注入 AGENTS.md 规约块并尽量装依赖。",
+      description:
+         "并行写隔离：git worktree 建/列/删，建时注入 AGENTS.md 规约块并尽量装依赖。",
       parameters: Type.Object({
-         op: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("remove")]),
+         op: Type.Union([
+            Type.Literal("create"),
+            Type.Literal("list"),
+            Type.Literal("remove"),
+         ]),
          name: Type.Optional(Type.String()),
       }),
       async execute(_id, params) {
@@ -444,20 +566,32 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             return reply("已移除 worktree " + directory);
          }
          mkdirSync(dirname(directory), { recursive: true });
-         git(cwd, ["worktree", "add", directory, "-b", "staffs/" + params.name]);
+         git(cwd, [
+            "worktree",
+            "add",
+            directory,
+            "-b",
+            "staffs/" + params.name,
+         ]);
          const injected = injectAgentsBlock(
             directory,
             [
                "# Pi-Staffs 隔离工作区",
                "",
-               "- 本目录是一个独立 worktree，分支 `staffs/" + params.name + "`。",
+               "- 本目录是一个独立 worktree，分支 `staffs/" +
+                  params.name +
+                  "`。",
                "- 只改本目录内的文件；改完回报 diff 摘要与验证命令，不要自行合并。",
                "- 需要跨文件重构或共享状态时，先回话给队长，不要偷偷改主工作区。",
             ].join("\n"),
          );
          const installed = installDeps(directory);
          return reply(
-            ["worktree：" + directory, "AGENTS.md：" + injected, installed].join("\n"),
+            [
+               "worktree：" + directory,
+               "AGENTS.md：" + injected,
+               installed,
+            ].join("\n"),
             { directory, injected, installed },
          );
       },
@@ -466,7 +600,8 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_interview",
       label: "Staffs Interview",
-      description: "逐题访谈并产出带 frontmatter 的 markdown 需求稿（有 UI 时用弹窗，否则用传入的 answers）。",
+      description:
+         "逐题访谈并产出带 frontmatter 的 markdown 需求稿（有 UI 时用弹窗，否则用传入的 answers）。",
       parameters: Type.Object({
          topic: Type.String(),
          questions: Type.Array(Type.String()),
@@ -474,7 +609,10 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
          output: Type.Optional(Type.String()),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
-         const target = resolve(cwd, params.output ?? join(".staffs", "interview.md"));
+         const target = resolve(
+            cwd,
+            params.output ?? join(".staffs", "interview.md"),
+         );
          // 续问（票 17 验收）：文件已在就先读回来，已答过的问题不再问一遍——重开会话能接着问。
          const existing = existsSync(target)
             ? parseInterview(readFileSync(target, "utf8"))
@@ -490,7 +628,11 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
                continue;
             }
             const known = answered.get(question);
-            if (known !== undefined && known.trim() && !known.startsWith("（未回答")) {
+            if (
+               known !== undefined &&
+               known.trim() &&
+               !known.startsWith("（未回答")
+            ) {
                collected.push(known);
                continue;
             }
@@ -509,7 +651,9 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             if (at >= 0) items[at] = item;
             else items.push(item);
          }
-         const pending = items.some((item) => !item.answer.trim() || item.answer.startsWith("（未回答"));
+         const pending = items.some(
+            (item) => !item.answer.trim() || item.answer.startsWith("（未回答"),
+         );
          const doc: InterviewDoc = {
             topic: params.topic,
             createdAt: existing?.createdAt || new Date().toISOString(),
@@ -529,7 +673,8 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_doctor",
       label: "Staffs Doctor",
-      description: "体检 Pi-Staffs：配置、档位、角色模型解析、权限表、合议成员、外部引擎、tracker 与看板。",
+      description:
+         "体检 Pi-Staffs：配置、档位、角色模型解析、权限表、合议成员、外部引擎、tracker 与看板。",
       parameters: Type.Object({}),
       async execute() {
          const outcome = loadStaffsConfig();
@@ -547,15 +692,23 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_astgrep",
       label: "Staffs AstGrep",
-      description: "结构化代码搜索/替换（ast-grep）。未安装时给出安装指引；给 rewrite 才会改盘。",
+      description:
+         "结构化代码搜索/替换（ast-grep）。未安装时给出安装指引；给 rewrite 才会改盘。",
       parameters: Type.Object({
          pattern: Type.String(),
          lang: Type.Optional(Type.String()),
          path: Type.Optional(Type.String()),
-         rewrite: Type.Optional(Type.String({ description: "给了就做替换（--rewrite + --update-all，会改盘）" })),
+         rewrite: Type.Optional(
+            Type.String({
+               description: "给了就做替换（--rewrite + --update-all，会改盘）",
+            }),
+         ),
       }),
       async execute(_id, params) {
-         const probe = await runCli("ast-grep", ["--version"], { cwd, timeoutMs: 15000 });
+         const probe = await runCli("ast-grep", ["--version"], {
+            cwd,
+            timeoutMs: 15000,
+         });
          if (probe.code !== 0)
             return reply(
                "未找到 ast-grep，无法做结构化搜索。安装：npm i -g @ast-grep/cli（或 cargo install ast-grep）。\n" +
@@ -566,9 +719,14 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             pattern: params.pattern,
             ...(params.lang === undefined ? {} : { lang: params.lang }),
             ...(params.path === undefined ? {} : { path: params.path }),
-            ...(params.rewrite === undefined ? {} : { rewrite: params.rewrite }),
+            ...(params.rewrite === undefined
+               ? {}
+               : { rewrite: params.rewrite }),
          });
-         const result = await runCli("ast-grep", args, { cwd, timeoutMs: 120000 });
+         const result = await runCli("ast-grep", args, {
+            cwd,
+            timeoutMs: 120000,
+         });
          const output = (result.stdout + result.stderr).trim();
          return reply(output ? output.slice(0, 20000) : "（无匹配）", {
             ok: result.code === 0,
@@ -580,7 +738,8 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
    pi.registerTool({
       name: "staffs_acp",
       label: "Staffs Acp",
-      description: "把任务交给外部 CLI 引擎（config.acp 里声明的 codex/gemini/claude 等）。只允许白名单引擎。",
+      description:
+         "把任务交给外部 CLI 引擎（config.acp 里声明的 codex/gemini/claude 等）。只允许白名单引擎。",
       parameters: Type.Object({
          engine: Type.String(),
          prompt: Type.String(),
@@ -594,15 +753,20 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
                `未配置外部引擎 ${params.engine}；可选：${Object.keys(config.acp ?? {}).join(", ") || "（空）"}`,
                { ok: false },
             );
-         const args = (engine.args ?? []).map((arg) => arg.split("{prompt}").join(params.prompt));
+         const args = (engine.args ?? []).map((arg) =>
+            arg.split("{prompt}").join(params.prompt),
+         );
          const usesStdin =
-            engine.stdin === true || !(engine.args ?? []).some((arg) => arg.includes("{prompt}"));
+            engine.stdin === true ||
+            !(engine.args ?? []).some((arg) => arg.includes("{prompt}"));
          const result = await runCli(engine.command, args, {
             cwd,
             timeoutMs: params.timeoutMs ?? engine.timeoutMs ?? 120000,
             ...(usesStdin ? { input: params.prompt } : {}),
          });
-         const text = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n--- stderr ---\n");
+         const text = [result.stdout.trim(), result.stderr.trim()]
+            .filter(Boolean)
+            .join("\n--- stderr ---\n");
          return reply(
             `[${params.engine}] 退出码 ${result.code}\n${text.slice(0, 20000) || "（无输出）"}`,
             { ok: result.code === 0, code: result.code, engine: params.engine },
@@ -635,10 +799,21 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             const decision = planReviewRound({
                round: params.round ?? 0,
                findings,
-               ...(params.maxRounds === undefined ? {} : { maxRounds: params.maxRounds }),
+               ...(params.maxRounds === undefined
+                  ? {}
+                  : { maxRounds: params.maxRounds }),
             });
             return reply(
-               [decision.action === "fix" ? "继续修：" : "停下：" , decision.reason, "", decision.action === "fix" ? formatFindingTasks(decision.findings) : ""].join("\n").trim(),
+               [
+                  decision.action === "fix" ? "继续修：" : "停下：",
+                  decision.reason,
+                  "",
+                  decision.action === "fix"
+                     ? formatFindingTasks(decision.findings)
+                     : "",
+               ]
+                  .join("\n")
+                  .trim(),
                { action: decision.action, findings: decision.findings.length },
             );
          }
@@ -651,7 +826,10 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
                diff = `（取 git diff ${base} 失败：${error instanceof Error ? error.message : String(error)}）`;
             }
          }
-         const acceptance = params.acceptance ?? readTaskSession(readState(currentStatePath())).criteria ?? [];
+         const acceptance =
+            params.acceptance ??
+            readTaskSession(readState(currentStatePath())).criteria ??
+            [];
          const brief = buildReviewBrief({
             task: params.task,
             diff: diff ?? "",
@@ -660,7 +838,7 @@ export const registerStaffsTools = (pi: ExtensionAPI, deps: ToolDeps = {}): void
             ...(params.focus ? { focus: params.focus } : {}),
          });
          return reply(
-            "下面这段交给干净上下文的 oracle 子 agent（staffs.run({ role: \"oracle\", task: brief })），把它的回话原样传回本工具：\n\n" +
+            '下面这段交给干净上下文的 oracle 子 agent（staffs.run({ role: "oracle", task: brief })），把它的回话原样传回本工具：\n\n' +
                brief,
             { chars: brief.length },
          );
@@ -689,7 +867,8 @@ export const formatInterview = (doc: InterviewDoc): string => {
       "# 访谈：" + doc.topic,
       "",
    ];
-   for (const item of doc.items) lines.push("## " + item.question, "", item.answer, "");
+   for (const item of doc.items)
+      lines.push("## " + item.question, "", item.answer, "");
    return lines.join("\n");
 };
 

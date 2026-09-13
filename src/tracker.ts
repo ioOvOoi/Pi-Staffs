@@ -10,7 +10,12 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { addTask, type StaffsState, type TaskStatus, type TeamTask } from "./state.ts";
+import {
+   addTask,
+   type StaffsState,
+   type TaskStatus,
+   type TeamTask,
+} from "./state.ts";
 
 const run = promisify(execFile);
 
@@ -36,7 +41,11 @@ export type TrackerAdapter = {
    listCandidates(): Promise<TrackerCandidate[]>;
    fetchIssue(id: string): Promise<TrackerIssue | undefined>;
    /** 归一成团队任务；id 由条目 id 决定，保证重复导入幂等。 */
-   normalize(issue: TrackerIssue): { id: string; title: string; deps: string[] };
+   normalize(issue: TrackerIssue): {
+      id: string;
+      title: string;
+      deps: string[];
+   };
    writeState(id: string, status: TaskStatus, note?: string): Promise<void>;
 };
 
@@ -126,7 +135,8 @@ export const localMarkdownTracker = (
  * 每次调用都可能失败（未安装/未登录）——失败就抛出人话错误，让编排者知道降级到 local-markdown。
  */
 export const githubTracker = (repo?: string): TrackerAdapter => {
-   const args = (rest: string[]): string[] => (repo ? ["-R", repo, ...rest] : rest);
+   const args = (rest: string[]): string[] =>
+      repo ? ["-R", repo, ...rest] : rest;
    const call = async (rest: string[]): Promise<string> => {
       try {
          const { stdout } = await run("gh", args(rest), { maxBuffer: 8 << 20 });

@@ -119,7 +119,8 @@ export const buildStaffsPrelude = (options: PreludeOptions): string => {
       synthResolved: synthSource
          ? (resolveModelRef(String(synthSource), aliases)?.ref ?? "")
          : "",
-      synthInstructions: councilConfig.synthInstructions || COUNCIL_SYNTH_INSTRUCTIONS,
+      synthInstructions:
+         councilConfig.synthInstructions || COUNCIL_SYNTH_INSTRUCTIONS,
       budgetTokens: councilConfig.budgetTokens ?? 200000,
    };
    // 权限矩阵（票 19）：宿主算好判定，guest 在派发点硬拒——越权请求不该走到 agents.run。

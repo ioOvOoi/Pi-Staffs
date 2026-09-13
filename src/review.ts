@@ -40,7 +40,8 @@ const SEPARATORS = [" — ", " – ", " - ", ": "];
 const splitOnce = (value: string): [string, string | undefined] => {
    for (const separator of SEPARATORS) {
       const at = value.indexOf(separator);
-      if (at >= 0) return [value.slice(0, at), value.slice(at + separator.length)];
+      if (at >= 0)
+         return [value.slice(0, at), value.slice(at + separator.length)];
    }
    return [value, undefined];
 };
@@ -120,20 +121,26 @@ export const planReviewRound = (input: {
 }): RoundDecision => {
    const maxRounds = input.maxRounds ?? 2;
    const order: FindingSeverity[] = ["blocker", "major", "minor", "nit"];
-   const relevant = (input.ignoreNits === false
-      ? input.findings
-      : input.findings.filter((finding) => finding.severity !== "nit")
+   const relevant = (
+      input.ignoreNits === false
+         ? input.findings
+         : input.findings.filter((finding) => finding.severity !== "nit")
    )
       .slice()
       .sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
-   if (!relevant.length) return { action: "stop", reason: "没有待修条目", findings: [] };
+   if (!relevant.length)
+      return { action: "stop", reason: "没有待修条目", findings: [] };
    if (input.round >= maxRounds)
       return {
          action: "stop",
          reason: `已达 ${maxRounds} 轮上限，剩余 ${relevant.length} 条交回队长判断`,
          findings: relevant,
       };
-   return { action: "fix", reason: `第 ${input.round + 1} 轮修复 ${relevant.length} 条`, findings: relevant };
+   return {
+      action: "fix",
+      reason: `第 ${input.round + 1} 轮修复 ${relevant.length} 条`,
+      findings: relevant,
+   };
 };
 
 export type ReviewBriefInput = {
@@ -151,7 +158,8 @@ export const buildReviewBrief = (input: ReviewBriefInput): string => {
    const diff = String(input.diff ?? "");
    const clipped =
       diff.length > maxChars
-         ? diff.slice(0, maxChars) + `\n（diff 已截断，原长 ${diff.length} 字符）`
+         ? diff.slice(0, maxChars) +
+           `\n（diff 已截断，原长 ${diff.length} 字符）`
          : diff;
    return [
       "你是独立审阅者。只看下面的任务、验收标准与 diff；不要读仓库其他文件，也不要重写实现。",
@@ -160,8 +168,12 @@ export const buildReviewBrief = (input: ReviewBriefInput): string => {
       input.task,
       "",
       "## 验收标准",
-      ...(input.acceptance?.length ? input.acceptance.map((item) => "- " + item) : ["（未提供）"]),
-      ...(input.focus?.length ? ["", "## 额外关注", ...input.focus.map((item) => "- " + item)] : []),
+      ...(input.acceptance?.length
+         ? input.acceptance.map((item) => "- " + item)
+         : ["（未提供）"]),
+      ...(input.focus?.length
+         ? ["", "## 额外关注", ...input.focus.map((item) => "- " + item)]
+         : []),
       "",
       "## diff" + (input.base ? `（相对 ${input.base}）` : ""),
       "```diff",

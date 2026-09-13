@@ -4,7 +4,13 @@
  * 技能本体随包发布在 <repo>/skills/<name>/SKILL.md：pi 会自动发现包的 skills/ 目录，
  * 所以「装了包就能用」。sync 只服务想把技能放到全局目录（~/.pi/agent/skills/pi-staffs）的场景。
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import {
+   cpSync,
+   existsSync,
+   mkdirSync,
+   readdirSync,
+   readFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +21,9 @@ const skillsRoot = (): string =>
    join(dirname(fileURLToPath(import.meta.url)), "..", "skills");
 
 /** 扫描随包技能：没有 name/description 的目录直接跳过（无效 frontmatter 加载不了）。 */
-export const listStaffsSkills = (root: string = skillsRoot()): StaffsSkill[] => {
+export const listStaffsSkills = (
+   root: string = skillsRoot(),
+): StaffsSkill[] => {
    if (!existsSync(root)) return [];
    const skills: StaffsSkill[] = [];
    for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -38,6 +46,8 @@ export const syncStaffsSkills = (
    const skills = listStaffsSkills();
    mkdirSync(target, { recursive: true });
    for (const skill of skills)
-      cpSync(dirname(skill.path), join(target, skill.name), { recursive: true });
+      cpSync(dirname(skill.path), join(target, skill.name), {
+         recursive: true,
+      });
    return { target, copied: skills.map((skill) => skill.name) };
 };

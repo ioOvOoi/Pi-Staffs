@@ -36,7 +36,11 @@ export const writeTaskSession = (
    patch: TaskSession,
    now: number = Date.now(),
 ): TaskSession => {
-   const next: TaskSession = { ...readTaskSession(state), ...patch, updatedAt: now };
+   const next: TaskSession = {
+      ...readTaskSession(state),
+      ...patch,
+      updatedAt: now,
+   };
    state.taskSession = next;
    state.updatedAt = now;
    return next;
@@ -58,25 +62,38 @@ export const stalledCandidates = (
  * phase-reminder 的等价物：只在「明显缺件」时出话，其余时候返回空串。
  * 空串是刻意的——往上下文里塞恒定文本会打掉 prompt cache（票 20）。
  */
-export const phaseReminder = (state: StaffsState, now: number = Date.now()): string => {
+export const phaseReminder = (
+   state: StaffsState,
+   now: number = Date.now(),
+): string => {
    const session = readTaskSession(state);
-   const running = state.attempts.filter((attempt) => attempt.phase !== "settled");
+   const running = state.attempts.filter(
+      (attempt) => attempt.phase !== "settled",
+   );
    const open = state.tasks.filter(
       (task) => task.status !== "done" && task.status !== "canceled",
    );
    const lines: string[] = [];
    if (running.length && !session.criteria?.length)
-      lines.push("派发已开始但没有验收标准：用 staffs_task 记下这次要满足的可测条件。");
+      lines.push(
+         "派发已开始但没有验收标准：用 staffs_task 记下这次要满足的可测条件。",
+      );
    if (open.length && !running.length)
       lines.push(
-         "有 " + open.length + " 个未完成任务却没人领：先看 staffs_board，再决定领取还是改派。",
+         "有 " +
+            open.length +
+            " 个未完成任务却没人领：先看 staffs_board，再决定领取还是改派。",
       );
    const stalled = stalledCandidates(state, now);
    if (stalled.length)
       lines.push(
          "疑似卡住：" +
-            stalled.map((attempt) => attempt.id + "(" + attempt.role + ")").join(", ") +
-            "——心跳静默超阈值；用 staffs.task('status'|" + "'stop'|" + "'revive') 处理。",
+            stalled
+               .map((attempt) => attempt.id + "(" + attempt.role + ")")
+               .join(", ") +
+            "——心跳静默超阈值；用 staffs.task('status'|" +
+            "'stop'|" +
+            "'revive') 处理。",
       );
    return lines.join("\n");
 };
@@ -113,7 +130,11 @@ export const toolLoopGuard = (
    const tail = recent.slice(-repeatLimit);
    const first = tail[0];
    if (!first) return undefined;
-   if (tail.every((entry) => entry.name === first.name && entry.key === first.key))
+   if (
+      tail.every(
+         (entry) => entry.name === first.name && entry.key === first.key,
+      )
+   )
       return (
          "同一条 " +
          first.name +
@@ -131,7 +152,8 @@ export const searchPathGuard = (
    toolName: string,
    input: unknown,
 ): string | undefined => {
-   if (toolName !== "bash" || !input || typeof input !== "object") return undefined;
+   if (toolName !== "bash" || !input || typeof input !== "object")
+      return undefined;
    const command = (input as Record<string, unknown>).command;
    if (typeof command !== "string" || !command) return undefined;
    const noisy = /(^|[;&|]\s*)(rg|grep|find|fd)\s/.test(command);
@@ -141,9 +163,16 @@ export const searchPathGuard = (
 };
 
 /** post-file-tool-nudge：改完文件马上提示验证，抑制「改完就说完成」。 */
-export const postFileToolNudge = (toolName: string, path?: string): string | undefined => {
+export const postFileToolNudge = (
+   toolName: string,
+   path?: string,
+): string | undefined => {
    if (toolName !== "edit" && toolName !== "write") return undefined;
-   return "已修改" + (path ? " " + path : "") + "：跑最小验证（类型/单测/直接探针），别只读代码下结论。";
+   return (
+      "已修改" +
+      (path ? " " + path : "") +
+      "：跑最小验证（类型/单测/直接探针），别只读代码下结论。"
+   );
 };
 
 /** 从工具入参里取一个可读目标（edit/write 用 path，bash 用命令首段）。 */
@@ -218,7 +247,10 @@ export type HookDeps = {
  * 接线。状态在内存里缓存、每轮结束落盘：tool_call 是热路径，不能每次读盘。
  * 看门狗只标记（markStalled）不杀进程——handle 在 guest 里，宿主只能把事实写下来让编排者处置。
  */
-export const registerStaffsHooks = (pi: ExtensionAPI, deps: HookDeps = {}): void => {
+export const registerStaffsHooks = (
+   pi: ExtensionAPI,
+   deps: HookDeps = {},
+): void => {
    const recent: Array<{ name: string; key: string }> = [];
 
    /**
@@ -246,7 +278,10 @@ export const registerStaffsHooks = (pi: ExtensionAPI, deps: HookDeps = {}): void
    });
 
    pi.on("tool_result", (event, ctx) => {
-      const notice = postFileToolNudge(event.toolName, describeTarget(event.input));
+      const notice = postFileToolNudge(
+         event.toolName,
+         describeTarget(event.input),
+      );
       if (notice && ctx.hasUI) ctx.ui.notify(notice, "info");
       return;
    });
@@ -264,7 +299,9 @@ export const registerStaffsHooks = (pi: ExtensionAPI, deps: HookDeps = {}): void
       if (!stalled.length) return;
       deps.notify?.(
          "Pi-Staffs 看门狗：" +
-            stalled.map((attempt) => attempt.id + "(" + attempt.role + ")").join(", ") +
+            stalled
+               .map((attempt) => attempt.id + "(" + attempt.role + ")")
+               .join(", ") +
             " 心跳靜止，已标记 stalled",
          "warning",
       );

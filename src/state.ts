@@ -95,8 +95,7 @@ export const DEFAULT_STALL_MS = 120_000;
 export const statePath = (
    cwd: string = process.cwd(),
    env: NodeJS.ProcessEnv = process.env,
-): string =>
-   env.PI_STAFFS_STATE?.trim() || join(cwd, ".staffs", "state.json");
+): string => env.PI_STAFFS_STATE?.trim() || join(cwd, ".staffs", "state.json");
 
 export const emptyState = (now: number = Date.now()): StaffsState => ({
    stateVersion: STATE_VERSION,
@@ -113,7 +112,9 @@ export const readState = (
 ): StaffsState => {
    if (!existsSync(path)) return emptyState(now);
    try {
-      const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<StaffsState>;
+      const raw = JSON.parse(
+         readFileSync(path, "utf8"),
+      ) as Partial<StaffsState>;
       return {
          ...emptyState(now),
          ...raw,
@@ -128,7 +129,10 @@ export const readState = (
 };
 
 /** 原子写（与 config.ts 同一手法：临时文件 + fsync + rename，权限 0600）。 */
-export const writeState = (state: StaffsState, path: string = statePath()): string => {
+export const writeState = (
+   state: StaffsState,
+   path: string = statePath(),
+): string => {
    mkdirSync(dirname(path), { recursive: true });
    const temporary = `${path}.${process.pid}.tmp`;
    const descriptor = openSync(temporary, "w", 0o600);
@@ -229,7 +233,9 @@ export const markStalled = (
       attempt.phase = "settled";
       attempt.terminal = "stalled";
       attempt.finishedAt = now;
-      attempt.notes.push(`心跳静止 ${Math.round((now - attempt.heartbeatAt) / 1000)}s`);
+      attempt.notes.push(
+         `心跳静止 ${Math.round((now - attempt.heartbeatAt) / 1000)}s`,
+      );
       stalled.push(attempt);
    }
    if (stalled.length) state.updatedAt = now;
@@ -257,7 +263,9 @@ export const addTask = (
 /** 依赖全部 done 且自身未开工的任务 = 就绪（AgentTeams 的 ready 集合）。 */
 export const readyTasks = (state: StaffsState): TeamTask[] => {
    const done = new Set(
-      state.tasks.filter((task) => task.status === "done").map((task) => task.id),
+      state.tasks
+         .filter((task) => task.status === "done")
+         .map((task) => task.id),
    );
    return state.tasks.filter(
       (task) =>
@@ -278,7 +286,8 @@ export const claimTask = (
    const ready = readyTasks(state).some((entry) => entry.id === id);
    if (!ready) {
       const blockedBy = task.deps.filter(
-         (dep) => state.tasks.find((entry) => entry.id === dep)?.status !== "done",
+         (dep) =>
+            state.tasks.find((entry) => entry.id === dep)?.status !== "done",
       );
       throw new Error(
          blockedBy.length
@@ -412,7 +421,9 @@ export const formatPanel = (
  */
 export const footerSummary = (state: StaffsState): string | undefined => {
    const open = state.attempts.filter((attempt) => attempt.phase !== "settled");
-   const stalled = state.attempts.filter((attempt) => attempt.terminal === "stalled");
+   const stalled = state.attempts.filter(
+      (attempt) => attempt.terminal === "stalled",
+   );
    const ready = readyTasks(state).length;
    const unread = state.mailbox.filter((message) => !message.read).length;
    const parts = [

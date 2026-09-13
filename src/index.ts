@@ -20,7 +20,13 @@ import { extractReceipts, recordReceipts } from "./attempts.ts";
 import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
 import { formatDoctorReport, registerStaffsTools } from "./tools.ts";
 import { listStaffsSkills, syncStaffsSkills } from "./skills.ts";
-import { footerSummary, formatBoard, formatPanel, readState, type StaffsState } from "./state.ts";
+import {
+   footerSummary,
+   formatBoard,
+   formatPanel,
+   readState,
+   type StaffsState,
+} from "./state.ts";
 
 export const PI_STAFFS_VERSION = "1.0.0";
 
@@ -60,7 +66,9 @@ const describeRole = (
  */
 export default function piStaffs(pi: ExtensionAPI): void {
    let cache: { config: StaffsConfig; path: string } | undefined;
-   let announce: ((message: string, level?: "info" | "warning" | "error") => void) | undefined;
+   let announce:
+      | ((message: string, level?: "info" | "warning" | "error") => void)
+      | undefined;
    /**
     * 读看板状态。**每次重读**：工具（staffs_task / staffs_mail …）与 guest 回执都各自直接写同一个
     * 文件，缓存一份就会读到旧值；文件只有几 KB，重读的代价远小于「看板与现实不一致」。
@@ -77,7 +85,11 @@ export default function piStaffs(pi: ExtensionAPI): void {
    registerStaffsTools(pi, {
       tracker: () => {
          const tracker = snapshot().config.tracker;
-         return { kind: tracker.kind, repo: tracker.repo, directory: tracker.directory };
+         return {
+            kind: tracker.kind,
+            repo: tracker.repo,
+            directory: tracker.directory,
+         };
       },
    });
    registerStaffsHooks(pi, {
@@ -112,7 +124,9 @@ export default function piStaffs(pi: ExtensionAPI): void {
       if (process.env.PI_FABRIC_PARENT_RUN) return;
       // 看板与提醒只在有内容时注入：空标题也会改前缀、打掉 prompt cache（票 20）。
       const injection = buildTurnInjection(board());
-      const suffix = injection ? DISPATCH_GUIDANCE + "\n\n" + injection : DISPATCH_GUIDANCE;
+      const suffix = injection
+         ? DISPATCH_GUIDANCE + "\n\n" + injection
+         : DISPATCH_GUIDANCE;
       return { systemPrompt: `${event.systemPrompt}\n\n${suffix}` };
    });
 
@@ -216,13 +230,19 @@ export default function piStaffs(pi: ExtensionAPI): void {
                return;
             }
             if (!PANEL_MODES.has(mode)) {
-               ctx.ui.notify(`观测层只能选 footer / widget / off，收到：${mode}`, "warning");
+               ctx.ui.notify(
+                  `观测层只能选 footer / widget / off，收到：${mode}`,
+                  "warning",
+               );
                return;
             }
             const next: StaffsConfig = { ...config, panel: mode as PanelMode };
             writeStaffsConfig(next, path);
             cache = { config: next, path };
-            ctx.ui.notify(`Pi-Staffs 观测层已切到 ${mode}（下一轮生效）`, "info");
+            ctx.ui.notify(
+               `Pi-Staffs 观测层已切到 ${mode}（下一轮生效）`,
+               "info",
+            );
             return;
          }
 

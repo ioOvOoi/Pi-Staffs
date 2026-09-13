@@ -49,7 +49,11 @@ export const ROLE_MODES: ReadonlySet<string> = new Set([
 ]);
 /** 观测层形态（票 15）：footer 一行数字 / widget 常驻面板 / off 关闭。面板只读，不是真相源（D13）。 */
 export type PanelMode = "footer" | "widget" | "off";
-export const PANEL_MODES: ReadonlySet<string> = new Set(["footer", "widget", "off"]);
+export const PANEL_MODES: ReadonlySet<string> = new Set([
+   "footer",
+   "widget",
+   "off",
+]);
 /** 角色名限制与 role-router 同族：小写字母数字与连字符。 */
 export const ROLE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -149,7 +153,10 @@ export type CouncilConfig = {
    budgetTokens?: number;
 };
 
-export const DEFAULT_COUNCIL: CouncilConfig = { members: [], budgetTokens: 200000 };
+export const DEFAULT_COUNCIL: CouncilConfig = {
+   members: [],
+   budgetTokens: 200000,
+};
 
 /**
  * 外部 CLI 引擎（票 16）：staffs_acp 只认识这里声明过的命令。
@@ -167,7 +174,12 @@ export type AcpEngineConfig = {
 export type AcpConfig = Record<string, AcpEngineConfig>;
 
 export const DEFAULT_ACP_ENGINES: AcpConfig = {
-   codex: { command: "codex", args: ["exec", "-"], stdin: true, timeoutMs: 300000 },
+   codex: {
+      command: "codex",
+      args: ["exec", "-"],
+      stdin: true,
+      timeoutMs: 300000,
+   },
    gemini: { command: "gemini", args: ["-p", "{prompt}"], timeoutMs: 300000 },
    claude: { command: "claude", args: ["-p", "{prompt}"], timeoutMs: 300000 },
 };
@@ -188,10 +200,15 @@ export const parseAcpEngines = (raw: unknown, issues: string[]): AcpConfig => {
       }
       if (
          engine.args !== undefined &&
-         (!Array.isArray(engine.args) || engine.args.some((arg) => typeof arg !== "string"))
+         (!Array.isArray(engine.args) ||
+            engine.args.some((arg) => typeof arg !== "string"))
       ) {
          issues.push(`acp.${name}.args 必须是字符串数组，已忽略该项的 args`);
-         merged[name] = { command: engine.command, ...(engine.stdin ? { stdin: true } : {}), ...(engine.timeoutMs ? { timeoutMs: engine.timeoutMs } : {}) };
+         merged[name] = {
+            command: engine.command,
+            ...(engine.stdin ? { stdin: true } : {}),
+            ...(engine.timeoutMs ? { timeoutMs: engine.timeoutMs } : {}),
+         };
          continue;
       }
       merged[name] = { ...engine };
@@ -633,8 +650,14 @@ export const validateConfig = (
       preset: presetName,
       presets,
       dispatch: { ...DEFAULT_DISPATCH, ...dispatchRaw },
-      tracker: { ...DEFAULT_TRACKER, ...(source.tracker as object | undefined) },
-      council: { ...DEFAULT_COUNCIL, ...(source.council as object | undefined) },
+      tracker: {
+         ...DEFAULT_TRACKER,
+         ...(source.tracker as object | undefined),
+      },
+      council: {
+         ...DEFAULT_COUNCIL,
+         ...(source.council as object | undefined),
+      },
       acp: parseAcpEngines(source.acp, issues),
       roles,
    };

@@ -35,7 +35,9 @@ export const readPermissions = (role: RoleRoute): RolePermissions => {
    const list = (key: string): string[] | undefined => {
       const value = source[key];
       if (!Array.isArray(value)) return undefined;
-      const items = value.filter((item): item is string => typeof item === "string");
+      const items = value.filter(
+         (item): item is string => typeof item === "string",
+      );
       return items.length ? items : undefined;
    };
    return { allow: list("allow"), ask: list("ask"), deny: list("deny") };
@@ -43,8 +45,7 @@ export const readPermissions = (role: RoleRoute): RolePermissions => {
 
 /** 通配 `*` 视为全量；否则精确匹配工具名。 */
 const covers = (values: string[] | undefined, tool: string): boolean =>
-   Array.isArray(values) &&
-   (values.includes(tool) || values.includes("*"));
+   Array.isArray(values) && (values.includes(tool) || values.includes("*"));
 
 /**
  * 判定一个角色可以动用哪些工具。
@@ -102,7 +103,9 @@ export const checkRequestedTool = (
    }
    const declared = Array.isArray(role.tools) ? role.tools : [];
    const withinRole =
-      declared.includes(tool) || declared.includes("*") || covers(permissions.allow, tool);
+      declared.includes(tool) ||
+      declared.includes("*") ||
+      covers(permissions.allow, tool);
    if (!withinRole) {
       return {
          ...verdict,
