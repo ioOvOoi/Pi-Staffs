@@ -30,8 +30,10 @@
     "pi-fabric": ">=0.21.10"
   },
   "devDependencies": {
-    "@types/node": "^25.0.0",
-    "typescript": "^5.9.0"
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-tui": "^0.80.10",
+    "@types/node": "^25.9.6",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "smoke": "node scripts/smoke.mjs",
