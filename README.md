@@ -21,7 +21,7 @@ pi install git:github.com/ioOvOoi/Pi-Staffs@v1
 git submodule add https://github.com/ioOvOoi/Pi-Staffs.git selfex/Pi-Staffs
 ```
 
-在 `~/.pi/agent/settings.json` 的 `packages` 里加一条绝对路径（本机即 `C:/Users/Zhannan/.pi/selfex/Pi-Staffs`），重启 Pi 或 `/reload`。
+在 `~/.pi/agent/settings.json` 的 `packages` 里加一条**相对路径**（相对 settings.json 所在目录解析）：`"../selfex/Pi-Staffs"`。这样同一份配置在多台机器上都能用（只要仓库都放在 `~/.pi/selfex/` 下），不要写死绝对路径。重启 Pi 或 `/reload`。
 
 依赖：Pi ≥ 0.80.6、pi-fabric ≥ 0.21.10（`peerDependencies`）、Node ≥ 24。`typebox` 由 Pi 提供，因此声明为 peer。
 
