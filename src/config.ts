@@ -47,6 +47,9 @@ export const ROLE_MODES: ReadonlySet<string> = new Set([
    "primary-or-advisory",
    "subagent",
 ]);
+/** 观测层形态（票 15）：footer 一行数字 / widget 常驻面板 / off 关闭。面板只读，不是真相源（D13）。 */
+export type PanelMode = "footer" | "widget" | "off";
+export const PANEL_MODES: ReadonlySet<string> = new Set(["footer", "widget", "off"]);
 /** 角色名限制与 role-router 同族：小写字母数字与连字符。 */
 export const ROLE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -60,6 +63,8 @@ export type RoleRoute = {
    enabled?: boolean;
    purpose?: string;
    instructions?: string;
+   /** 角色权限表（票 19）：allow / ask / deny；形状宽松读取、严格判定。 */
+   permissions?: RolePermissionTable;
    [key: string]: unknown;
 };
 
@@ -75,7 +80,16 @@ export type Presets = Record<string, Record<string, PresetRole>>;
 export type DispatchConfig = {
    primaryRole?: string;
    defaultImplementationRole?: string;
-   /** 每个模型最多尝试几次（含首次）；准入类失败值得多试一次。 */
+   /**
+    * 同一模型允许的连续可重试失败上限（D26）；总尝试次数 = 1 + maxRetries。
+    * 缺省时不生效，退回 attemptsPerModel（两者都没配则同模型最多 2 次尝试）。
+    */
+   maxRetries?: number;
+   /** 首次重试前的**下限**等待（D26）：给上游自愈留时间。0 = 不额外等。 */
+   initialRetryDelayMs?: number;
+   /** 后续重试之间的下限等待（D26）。 */
+   retryDelayMs?: number;
+   /** 旧字段：没有 maxRetries 时兼容使用（含首次的尝试次数）。 */
    attemptsPerModel?: number;
    backoffBaseMs?: number;
    backoffCapMs?: number;
@@ -84,10 +98,16 @@ export type DispatchConfig = {
 
 export type StaffsConfig = {
    configVersion: number;
+   /** 观测层形态（票 15）。 */
+   panel: PanelMode;
    /** 当前档位名；空串表示不用档位（各角色用自带 model）。 */
    preset: string;
    presets: Presets;
    dispatch: DispatchConfig;
+   tracker: TrackerConfig;
+   council: CouncilConfig;
+   /** 外部 CLI 引擎表（票 16）：staffs_acp 的白名单。 */
+   acp: AcpConfig;
    roles: Record<string, RoleRoute>;
    [key: string]: unknown;
 };
@@ -95,9 +115,113 @@ export type StaffsConfig = {
 export const DEFAULT_DISPATCH: DispatchConfig = {
    primaryRole: "orchestrator",
    defaultImplementationRole: "fixer",
+   // 默认**不写** maxRetries：写了就会盖掉老配置里的 attemptsPerModel（冒烟测试钉住了这条兼容性）。
+   initialRetryDelayMs: 0,
+   retryDelayMs: 500,
    attemptsPerModel: 2,
    backoffBaseMs: 1500,
    backoffCapMs: 30000,
+};
+
+/** 角色权限表（票 19）：allow / ask / deny，判定在预检期发生。 */
+export type RolePermissionTable = {
+   allow?: string[];
+   ask?: string[];
+   deny?: string[];
+};
+
+/** tracker 选择（票 12 / D11 / D18）：local-markdown 默认，github-issues 为第二实现。 */
+export type TrackerConfig = {
+   kind: "local-markdown" | "github-issues";
+   /** github-issues 用：owner/repo；留空则用当前仓库。 */
+   repo?: string;
+   /** local-markdown 用：票目录。 */
+   directory?: string;
+};
+
+export const DEFAULT_TRACKER: TrackerConfig = { kind: "local-markdown" };
+
+/** 合议配置（票 07）：members 为空时退回 roles.council.councilMembers，全部走别名解析。 */
+export type CouncilConfig = {
+   members?: string[];
+   synth?: string;
+   synthInstructions?: string;
+   budgetTokens?: number;
+};
+
+export const DEFAULT_COUNCIL: CouncilConfig = { members: [], budgetTokens: 200000 };
+
+/**
+ * 外部 CLI 引擎（票 16）：staffs_acp 只认识这里声明过的命令。
+ * 为什么必须配置化：工具参数由模型生成，若允许任意 command，等于把执行任意进程的权力交给模型。
+ */
+export type AcpEngineConfig = {
+   command: string;
+   /** 提示词用 {prompt} 占位符注入；没写占位符就走 stdin。 */
+   args?: string[];
+   /** true 时强制走 stdin（即使 args 里有 {prompt}）。 */
+   stdin?: boolean;
+   timeoutMs?: number;
+};
+
+export type AcpConfig = Record<string, AcpEngineConfig>;
+
+export const DEFAULT_ACP_ENGINES: AcpConfig = {
+   codex: { command: "codex", args: ["exec", "-"], stdin: true, timeoutMs: 300000 },
+   gemini: { command: "gemini", args: ["-p", "{prompt}"], timeoutMs: 300000 },
+   claude: { command: "claude", args: ["-p", "{prompt}"], timeoutMs: 300000 },
+};
+
+/** 逐条校验并合并默认引擎：坏条目只丢自己，不拖垮整份配置。 */
+export const parseAcpEngines = (raw: unknown, issues: string[]): AcpConfig => {
+   const merged: AcpConfig = { ...DEFAULT_ACP_ENGINES };
+   if (!raw || typeof raw !== "object") return merged;
+   for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (!value || typeof value !== "object") {
+         issues.push(`acp.${name} 不是对象，已忽略`);
+         continue;
+      }
+      const engine = value as AcpEngineConfig;
+      if (typeof engine.command !== "string" || !engine.command.trim()) {
+         issues.push(`acp.${name}.command 必须是非空字符串，已忽略`);
+         continue;
+      }
+      if (
+         engine.args !== undefined &&
+         (!Array.isArray(engine.args) || engine.args.some((arg) => typeof arg !== "string"))
+      ) {
+         issues.push(`acp.${name}.args 必须是字符串数组，已忽略该项的 args`);
+         merged[name] = { command: engine.command, ...(engine.stdin ? { stdin: true } : {}), ...(engine.timeoutMs ? { timeoutMs: engine.timeoutMs } : {}) };
+         continue;
+      }
+      merged[name] = { ...engine };
+   }
+   return merged;
+};
+
+/**
+ * 合议成员解析（票 07）：显式 members 优先，其次角色上的 councilMembers。
+ * 为什么在宿主解析：guest 不该认识别名表（D6/D23）；解析不了的在预检期就能被发现。
+ */
+export const resolveCouncilModels = (
+   config: StaffsConfig,
+   aliases: Record<string, string> = {},
+   limit = 5,
+): string[] => {
+   const declared = config.council?.members?.length
+      ? config.council.members
+      : Array.isArray(config.roles.council?.councilMembers)
+        ? (config.roles.council.councilMembers as string[])
+        : [];
+   const out: string[] = [];
+   for (const ref of declared) {
+      const resolved = resolveModelRef(ref, aliases);
+      const value = resolved?.ref;
+      if (!value || out.includes(value)) continue;
+      out.push(value);
+      if (out.length >= limit) break;
+   }
+   return out;
 };
 
 /**
@@ -239,9 +363,13 @@ export const DEFAULT_PRESETS: Presets = {
 /** 全新配置的落盘内容（三处默认构造共用，避免各写一份而漏字段）。 */
 export const defaultStaffsConfig = (): StaffsConfig => ({
    configVersion: CONFIG_VERSION,
+   panel: "footer",
    preset: DEFAULT_PRESET,
    presets: { baseline: { ...DEFAULT_PRESETS.baseline } },
    dispatch: { ...DEFAULT_DISPATCH },
+   tracker: { ...DEFAULT_TRACKER },
+   acp: { ...DEFAULT_ACP_ENGINES },
+   council: { ...DEFAULT_COUNCIL },
    roles: { ...DEFAULT_ROLES },
 });
 
@@ -339,10 +467,17 @@ export const resolveRole = (
    return { ...role, model, thinking };
 };
 
+/** 观测层形态：非法值退回 footer——新字段不该让整份配置报错。 */
+const panelMode = (source: Record<string, unknown>): PanelMode =>
+   typeof source.panel === "string" && PANEL_MODES.has(source.panel)
+      ? (source.panel as PanelMode)
+      : "footer";
+
 /**
  * 校验并归一：逐字段报问题（role-router 的风格），但不因为一个问题就丢掉整份配置——
  * 能用的部分继续用，问题列表交给 UI 提示。
  */
+
 export const validateConfig = (
    raw: unknown,
    aliases: Record<string, string>,
@@ -385,12 +520,34 @@ export const validateConfig = (
       issues.push(
          `roles 为空，本次使用内置七神祇（${Object.keys(DEFAULT_ROLES).join(", ")}）`,
       );
+      // 默认值只在用户没给 roles 时兜底；council/dispatch/tracker/acp/presets 一律尊重用户配置，
+      // 否则「没写 roles」会被误判成「整份配置都用默认」（票 07/12 的合议成员就这么被吃掉过）。
+      const base = defaultStaffsConfig();
       return {
          config: {
+            ...base,
             ...source,
-            ...defaultStaffsConfig(),
             configVersion,
+            panel: panelMode(source),
+            roles: base.roles,
+            preset:
+               typeof source.preset === "string" && source.preset.trim()
+                  ? source.preset
+                  : base.preset,
+            presets: {
+               ...base.presets,
+               ...((source.presets as object | undefined) ?? {}),
+            },
             dispatch: { ...DEFAULT_DISPATCH, ...dispatchRaw },
+            tracker: {
+               ...DEFAULT_TRACKER,
+               ...((source.tracker as object | undefined) ?? {}),
+            },
+            council: {
+               ...DEFAULT_COUNCIL,
+               ...((source.council as object | undefined) ?? {}),
+            },
+            acp: parseAcpEngines(source.acp, issues),
          },
          issues,
       };
@@ -435,7 +592,9 @@ export const validateConfig = (
          entries as Record<string, unknown>,
       )) {
          if (!entry || typeof entry !== "object") {
-            issues.push(`档位 ${presetName} 的角色 ${roleName} 不是对象，已跳过`);
+            issues.push(
+               `档位 ${presetName} 的角色 ${roleName} 不是对象，已跳过`,
+            );
             continue;
          }
          if (!roles[roleName]) {
@@ -462,17 +621,28 @@ export const validateConfig = (
    const presetName =
       typeof source.preset === "string" ? source.preset.trim() : "";
    if (presetName && !presets[presetName]) {
-      issues.push(`preset 指向不存在的档位：${presetName}（本次改用角色基线模型）`);
+      issues.push(
+         `preset 指向不存在的档位：${presetName}（本次改用角色基线模型）`,
+      );
    }
 
    const config: StaffsConfig = {
       ...source,
       configVersion,
+      panel: panelMode(source),
       preset: presetName,
       presets,
       dispatch: { ...DEFAULT_DISPATCH, ...dispatchRaw },
+      tracker: { ...DEFAULT_TRACKER, ...(source.tracker as object | undefined) },
+      council: { ...DEFAULT_COUNCIL, ...(source.council as object | undefined) },
+      acp: parseAcpEngines(source.acp, issues),
       roles,
    };
+   // 合议成员解析不了时提前说话：否则派发时才炸，且错误文本指向别处（票 07/14 的快速失败精神）。
+   if (!resolveCouncilModels(config, aliases).length)
+      issues.push(
+         "合议成员一个都解析不出来：检查 council.members 或 roles.council.councilMembers 的别名",
+      );
    if (
       config.dispatch.primaryRole &&
       !config.roles[config.dispatch.primaryRole]

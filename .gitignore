@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# 运行期团队状态（冒烟测试在本目录跑时会生成）
+.staffs/

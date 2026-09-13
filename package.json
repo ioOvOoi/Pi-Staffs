@@ -1,11 +1,13 @@
 {
   "name": "pi-staffs",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Pi 的编排插件：角色矩阵 + 有状态派发 + 团队 DAG + TUI 面板",
   "type": "module",
   "main": "./src/index.ts",
   "files": [
     "src/",
+    "prompts/",
+    "skills/",
     "scripts/",
     "README.md"
   ],
@@ -17,17 +19,28 @@
     "multi-agent"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ioOvOoi/Pi-Staffs.git"
+  },
   "engines": {
     "node": ">=24"
   },
   "pi": {
     "extensions": [
       "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
     ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.80.6",
-    "pi-fabric": ">=0.21.10"
+    "pi-fabric": ">=0.21.10",
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",
