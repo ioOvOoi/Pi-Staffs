@@ -1,6 +1,7 @@
 /**
  * Pi-Staffs 配置模块：schema 逐字照抄 pi-fabric-role-router 0.4.1（票 02 取证，D15），
- * 只做三处差异：删 runner/transport/extensions（D12 单一引擎），加 fallbacks（D17）。
+ * 差异：删 runner/transport/extensions（D12 单一引擎），加模型档位 preset/presets（D23）；
+ * 不再有每角色备胎链（D24 —— 与其自动换模型，不如让人切档位）。
  *
  * 为什么保留开放形状（[key: string]: unknown）：用户与 Fabric 都会往角色里加字段，
  * 我们读写时必须原样带过——否则一次 save 就静默吃掉别人的配置。
@@ -59,10 +60,17 @@ export type RoleRoute = {
    enabled?: boolean;
    purpose?: string;
    instructions?: string;
-   /** D17：按顺序尝试的备胎模型；每次回退都要记账。 */
-   fallbacks?: string[];
    [key: string]: unknown;
 };
+
+/** 档位里对单个角色的覆盖（D23）：只允许改模型与思考档。 */
+export type PresetRole = {
+   model: string;
+   thinking?: ThinkingLevel;
+   [key: string]: unknown;
+};
+/** 档位表：presets[档位名][角色名] = 覆盖；没写的角色继续用基线。 */
+export type Presets = Record<string, Record<string, PresetRole>>;
 
 export type DispatchConfig = {
    primaryRole?: string;
@@ -76,6 +84,9 @@ export type DispatchConfig = {
 
 export type StaffsConfig = {
    configVersion: number;
+   /** 当前档位名；空串表示不用档位（各角色用自带 model）。 */
+   preset: string;
+   presets: Presets;
    dispatch: DispatchConfig;
    roles: Record<string, RoleRoute>;
    [key: string]: unknown;
@@ -91,7 +102,7 @@ export const DEFAULT_DISPATCH: DispatchConfig = {
 
 /**
  * 七神祇（票 04 矩阵落盘值，来自 notes/04-role-matrix.md）。
- * 主模型全在 ollama-cloud —— 这正是每条 fallbacks 至少要有一跳跨 provider 的原因。
+ * 这里的 model 是**基线**：档位（presets）里的同名条目会覆盖它（D23）。
  */
 export const DEFAULT_ROLES: Record<string, RoleRoute> = {
    orchestrator: {
@@ -101,7 +112,6 @@ export const DEFAULT_ROLES: Record<string, RoleRoute> = {
       tools: ["*"],
       enabled: true,
       purpose: "队长：拆任务 / 派发 / 整合 / 验收",
-      fallbacks: ["ollama-cloud/glm-5.2", "xiaomi-token-plan-cn/mimo-v2.5-pro"],
    },
    explorer: {
       model: "ollama-cloud/glm-5.3-flash",
@@ -110,7 +120,6 @@ export const DEFAULT_ROLES: Record<string, RoleRoute> = {
       tools: ["read", "grep", "find", "ls"],
       enabled: true,
       purpose: "只读侦察：路径 + 行号 + 结论；也能读图（截图/设计稿/图表）",
-      fallbacks: ["ollama-cloud/glm-5.1", "xai/grok-4.3"],
    },
    oracle: {
       model: "ollama-cloud/kimi-k3",
@@ -131,7 +140,6 @@ export const DEFAULT_ROLES: Record<string, RoleRoute> = {
       ],
       enabled: true,
       purpose: "战略顾问与审查者：架构选型、diff 审查、调试方向、安全与 YAGNI",
-      fallbacks: ["ollama-cloud/kimi-k2.7-code", "xiaomi-token-plan-cn/mimo-v2.5-pro"],
    },
    council: {
       model: "ollama-cloud/glm-5.3",
@@ -147,7 +155,6 @@ export const DEFAULT_ROLES: Record<string, RoleRoute> = {
          "xai/grok-4.6",
          "ollama-cloud/minimax-m2.7",
       ],
-      fallbacks: ["ollama-cloud/glm-5.2", "xai/grok-4.6"],
    },
    librarian: {
       model: "ollama-cloud/deepseek-v4-flash:0731",
@@ -167,7 +174,6 @@ export const DEFAULT_ROLES: Record<string, RoleRoute> = {
       ],
       enabled: true,
       purpose: "外部知识：库 API、版本特定行为、需要最新 Web 事实的问题",
-      fallbacks: ["ollama-cloud/glm-5.1", "bazaarlink/auto:free"],
    },
    designer: {
       model: "ollama-cloud/glm-5.3-flash",
@@ -189,8 +195,8 @@ export const DEFAULT_ROLES: Record<string, RoleRoute> = {
          "ast_search",
       ],
       enabled: true,
-      purpose: "用户可见界面：布局、响应式、UX 关键组件、视觉一致性、动效微交互",
-      fallbacks: ["ollama-cloud/glm-5.3", "xai/grok-4.5"],
+      purpose:
+         "用户可见界面：布局、响应式、UX 关键组件、视觉一致性、动效微交互",
    },
    fixer: {
       model: "ollama-cloud/deepseek-v4-flash:0731",
@@ -213,19 +219,43 @@ export const DEFAULT_ROLES: Record<string, RoleRoute> = {
       ],
       enabled: true,
       purpose: "按已定规范做有边界改动、可并行分区实现、测试改动",
-      fallbacks: [
-         "ollama-cloud/glm-5.2",
-         "xiaomi-token-plan-cn/mimo-v2.5",
-         "bazaarlink/auto:free",
-      ],
    },
 };
 
-export const staffsConfigPath = (env: NodeJS.ProcessEnv = process.env): string =>
-   env.PI_STAFFS_CONFIG?.trim() || join(homedir(), ".pi", "agent", "pi-staffs.json");
+/**
+ * 内置档位（D23）：`baseline` 就是各角色的基线模型。加档位只需在 presets 里加一个名字
+ * （如 "cheap" / "cc"），条目只写要覆盖的角色。
+ */
+export const DEFAULT_PRESET = "baseline";
+export const DEFAULT_PRESETS: Presets = {
+   baseline: Object.fromEntries(
+      Object.entries(DEFAULT_ROLES).map(([name, role]) => [
+         name,
+         { model: role.model },
+      ]),
+   ),
+};
 
-export const fabricConfigPath = (env: NodeJS.ProcessEnv = process.env): string =>
-   env.PI_STAFFS_FABRIC_CONFIG?.trim() || join(homedir(), ".pi", "agent", "fabric.json");
+/** 全新配置的落盘内容（三处默认构造共用，避免各写一份而漏字段）。 */
+export const defaultStaffsConfig = (): StaffsConfig => ({
+   configVersion: CONFIG_VERSION,
+   preset: DEFAULT_PRESET,
+   presets: { baseline: { ...DEFAULT_PRESETS.baseline } },
+   dispatch: { ...DEFAULT_DISPATCH },
+   roles: { ...DEFAULT_ROLES },
+});
+
+export const staffsConfigPath = (
+   env: NodeJS.ProcessEnv = process.env,
+): string =>
+   env.PI_STAFFS_CONFIG?.trim() ||
+   join(homedir(), ".pi", "agent", "pi-staffs.json");
+
+export const fabricConfigPath = (
+   env: NodeJS.ProcessEnv = process.env,
+): string =>
+   env.PI_STAFFS_FABRIC_CONFIG?.trim() ||
+   join(homedir(), ".pi", "agent", "fabric.json");
 
 /** 读 JSON；任何失败（不存在/坏 JSON）都返回 undefined —— 调用方决定如何降级。 */
 export const readJson = (path: string): unknown => {
@@ -237,12 +267,17 @@ export const readJson = (path: string): unknown => {
 };
 
 /** 只取 fabric.json 的 models.aliases；D6 要求模型来源走别名，所以别名表是必需输入。 */
-export const readAliases = (path: string = fabricConfigPath()): Record<string, string> => {
+export const readAliases = (
+   path: string = fabricConfigPath(),
+): Record<string, string> => {
    const raw = readJson(path);
-   const aliases = (raw as { models?: { aliases?: unknown } } | undefined)?.models?.aliases;
+   const aliases = (raw as { models?: { aliases?: unknown } } | undefined)
+      ?.models?.aliases;
    if (!aliases || typeof aliases !== "object") return {};
    const out: Record<string, string> = {};
-   for (const [name, value] of Object.entries(aliases as Record<string, unknown>)) {
+   for (const [name, value] of Object.entries(
+      aliases as Record<string, unknown>,
+   )) {
       if (typeof value === "string" && value.trim()) out[name] = value.trim();
    }
    return out;
@@ -274,21 +309,34 @@ export const resolveModelRef = (
    return { ref: `${provider}/${id}`, provider, id };
 };
 
-/** 角色的尝试链：model 打头，fallbacks 依序跟上（去重）。 */
-export const resolveChain = (
+/** 当前档位名：preset 为空或指向不存在的档位时返回 ""（= 不用档位，各角色用自己的 model）。 */
+export const activePresetName = (config: StaffsConfig): string => {
+   const name = typeof config.preset === "string" ? config.preset.trim() : "";
+   return name && config.presets?.[name] ? name : "";
+};
+
+/**
+ * 生效角色 = 角色基线 ⊕ 档位覆盖（D23）：档位只覆盖 model 与 thinking，
+ * tools / mode / 提示词仍由角色决定——避免同一角色在不同档位下行为飘移。
+ */
+export const resolveRole = (
    config: StaffsConfig,
    roleName: string,
-   aliases: Record<string, string>,
-): string[] => {
+): RoleRoute | undefined => {
    const role = config.roles[roleName];
-   if (!role) return [];
-   const refs: unknown[] = [role.model, ...(Array.isArray(role.fallbacks) ? role.fallbacks : [])];
-   const chain: string[] = [];
-   for (const ref of refs) {
-      const resolved = resolveModelRef(ref, aliases);
-      if (resolved && !chain.includes(resolved.ref)) chain.push(resolved.ref);
-   }
-   return chain;
+   if (!role) return undefined;
+   const overlay = config.presets?.[activePresetName(config)]?.[roleName];
+   if (!overlay || typeof overlay !== "object") return role;
+   const model =
+      typeof overlay.model === "string" && overlay.model.trim()
+         ? overlay.model.trim()
+         : role.model;
+   const thinking =
+      typeof overlay.thinking === "string" &&
+      THINKING_LEVELS.has(overlay.thinking)
+         ? overlay.thinking
+         : role.thinking;
+   return { ...role, model, thinking };
 };
 
 /**
@@ -300,9 +348,14 @@ export const validateConfig = (
    aliases: Record<string, string>,
 ): { config: StaffsConfig; issues: string[] } => {
    const issues: string[] = [];
-   const source = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+   const source = (raw && typeof raw === "object" ? raw : {}) as Record<
+      string,
+      unknown
+   >;
    const dispatchRaw = (
-      source.dispatch && typeof source.dispatch === "object" ? source.dispatch : {}
+      source.dispatch && typeof source.dispatch === "object"
+         ? source.dispatch
+         : {}
    ) as DispatchConfig;
    const rolesRaw = (
       source.roles && typeof source.roles === "object" ? source.roles : {}
@@ -311,7 +364,9 @@ export const validateConfig = (
    const roles: Record<string, RoleRoute> = {};
    for (const [name, value] of Object.entries(rolesRaw)) {
       if (!ROLE_NAME_PATTERN.test(name)) {
-         issues.push(`角色名 ${name} 非法（须匹配 ${ROLE_NAME_PATTERN.source}）`);
+         issues.push(
+            `角色名 ${name} 非法（须匹配 ${ROLE_NAME_PATTERN.source}）`,
+         );
          continue;
       }
       if (!value || typeof value !== "object") {
@@ -322,16 +377,20 @@ export const validateConfig = (
    }
 
    const configVersion =
-      typeof source.configVersion === "number" ? source.configVersion : CONFIG_VERSION;
+      typeof source.configVersion === "number"
+         ? source.configVersion
+         : CONFIG_VERSION;
 
    if (Object.keys(roles).length === 0) {
-      issues.push(`roles 为空，本次使用内置七神祇（${Object.keys(DEFAULT_ROLES).join(", ")}）`);
+      issues.push(
+         `roles 为空，本次使用内置七神祇（${Object.keys(DEFAULT_ROLES).join(", ")}）`,
+      );
       return {
          config: {
             ...source,
+            ...defaultStaffsConfig(),
             configVersion,
             dispatch: { ...DEFAULT_DISPATCH, ...dispatchRaw },
-            roles: { ...DEFAULT_ROLES },
          },
          issues,
       };
@@ -341,10 +400,16 @@ export const validateConfig = (
       if (!resolveModelRef(role.model, aliases)) {
          issues.push(`角色 ${name} 的 model 无法解析：${String(role.model)}`);
       }
-      if (typeof role.thinking !== "string" || !THINKING_LEVELS.has(role.thinking)) {
+      if (
+         typeof role.thinking !== "string" ||
+         !THINKING_LEVELS.has(role.thinking)
+      ) {
          issues.push(`角色 ${name} 的 thinking 非法：${String(role.thinking)}`);
       }
-      if (!Array.isArray(role.tools) || role.tools.some((tool) => typeof tool !== "string")) {
+      if (
+         !Array.isArray(role.tools) ||
+         role.tools.some((tool) => typeof tool !== "string")
+      ) {
          issues.push(`角色 ${name} 的 tools 必须是字符串数组`);
       }
       if (typeof role.mode !== "string" || !ROLE_MODES.has(role.mode)) {
@@ -353,30 +418,68 @@ export const validateConfig = (
       if (role.enabled !== undefined && typeof role.enabled !== "boolean") {
          issues.push(`角色 ${name} 的 enabled 必须是布尔`);
       }
-      if (role.fallbacks !== undefined) {
-         if (
-            !Array.isArray(role.fallbacks) ||
-            role.fallbacks.some((fallback) => typeof fallback !== "string")
-         ) {
-            issues.push(`角色 ${name} 的 fallbacks 必须是字符串数组`);
-         } else {
-            role.fallbacks.forEach((fallback) => {
-               if (!resolveModelRef(fallback, aliases)) {
-                  issues.push(`角色 ${name} 的 fallback 无法解析：${fallback}`);
-               }
-            });
-         }
+   }
+
+   // 档位校验（D23）：条目必须指向已存在的角色；报问题但**保留**原样，避免一次 save 吃掉用户数据。
+   const presetsRaw = (
+      source.presets && typeof source.presets === "object" ? source.presets : {}
+   ) as Record<string, unknown>;
+   const presets: Presets = {};
+   for (const [presetName, entries] of Object.entries(presetsRaw)) {
+      if (!entries || typeof entries !== "object") {
+         issues.push(`档位 ${presetName} 不是对象，已跳过`);
+         continue;
       }
+      const kept: Record<string, PresetRole> = {};
+      for (const [roleName, entry] of Object.entries(
+         entries as Record<string, unknown>,
+      )) {
+         if (!entry || typeof entry !== "object") {
+            issues.push(`档位 ${presetName} 的角色 ${roleName} 不是对象，已跳过`);
+            continue;
+         }
+         if (!roles[roleName]) {
+            issues.push(`档位 ${presetName} 引用了不存在的角色：${roleName}`);
+         }
+         const overlay = entry as PresetRole;
+         if (!resolveModelRef(overlay.model, aliases)) {
+            issues.push(
+               `档位 ${presetName} 的角色 ${roleName} 模型无法解析：${String(overlay.model)}`,
+            );
+         }
+         if (
+            overlay.thinking !== undefined &&
+            !THINKING_LEVELS.has(String(overlay.thinking))
+         ) {
+            issues.push(
+               `档位 ${presetName} 的角色 ${roleName} thinking 非法：${String(overlay.thinking)}`,
+            );
+         }
+         kept[roleName] = overlay;
+      }
+      presets[presetName] = kept;
+   }
+   const presetName =
+      typeof source.preset === "string" ? source.preset.trim() : "";
+   if (presetName && !presets[presetName]) {
+      issues.push(`preset 指向不存在的档位：${presetName}（本次改用角色基线模型）`);
    }
 
    const config: StaffsConfig = {
       ...source,
       configVersion,
+      preset: presetName,
+      presets,
       dispatch: { ...DEFAULT_DISPATCH, ...dispatchRaw },
       roles,
    };
-   if (config.dispatch.primaryRole && !config.roles[config.dispatch.primaryRole]) {
-      issues.push(`dispatch.primaryRole 指向不存在的角色：${config.dispatch.primaryRole}`);
+   if (
+      config.dispatch.primaryRole &&
+      !config.roles[config.dispatch.primaryRole]
+   ) {
+      issues.push(
+         `dispatch.primaryRole 指向不存在的角色：${config.dispatch.primaryRole}`,
+      );
    }
    if (
       config.dispatch.defaultImplementationRole &&
@@ -406,23 +509,17 @@ export const loadStaffsConfig = (
    const path = options.path ?? staffsConfigPath();
    const aliases = readAliases(options.aliasesPath ?? fabricConfigPath());
    if (!existsSync(path)) {
-      const config: StaffsConfig = {
-         configVersion: CONFIG_VERSION,
-         dispatch: { ...DEFAULT_DISPATCH },
-         roles: { ...DEFAULT_ROLES },
-      };
+      const config = defaultStaffsConfig();
       writeStaffsConfig(config, path);
       return { config, issues: [], created: true, path };
    }
    const raw = readJson(path);
    if (raw === undefined) {
       return {
-         config: {
-            configVersion: CONFIG_VERSION,
-            dispatch: { ...DEFAULT_DISPATCH },
-            roles: { ...DEFAULT_ROLES },
-         },
-         issues: [`配置文件不是合法 JSON，本次用内置默认；原文件未改动：${path}`],
+         config: defaultStaffsConfig(),
+         issues: [
+            `配置文件不是合法 JSON，本次用内置默认；原文件未改动：${path}`,
+         ],
          created: false,
          path,
       };
