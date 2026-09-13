@@ -1,15 +1,20 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2023"],
-    "types": ["node"],
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true
-  },
-  "include": ["src", "scripts"]
+   "compilerOptions": {
+      "target": "ES2023",
+      "module": "ESNext",
+      "moduleResolution": "bundler",
+      "lib": ["ES2023"],
+      "types": ["node"],
+      "strict": true,
+      "noEmit": true,
+      "skipLibCheck": true,
+      "verbatimModuleSyntax": true,
+      "isolatedModules": true,
+      "allowImportingTsExtensions": true,
+      "allowJs": true,
+      "checkJs": true
+   },
+   // 只检查 src：scripts/smoke.mjs 是测试壳，刻意的宽松桩（假 ctx / 假 event）不该被
+   // strict 类型检查绑架，否则每加一个断言都要写一遍 SDK 类型。
+   "include": ["src"]
 }
