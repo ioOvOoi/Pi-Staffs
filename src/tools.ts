@@ -93,7 +93,7 @@ const WORKTREE_ROOT = ".staffs/worktrees";
  * worktree 名 → 目录与分支（票 18 的安全边界）。
  *
  * 为什么不能只写 resolve(cwd, WORKTREE_ROOT, params.name)：name 来自模型，
- * 而 \"../\" 会被 resolve 规范化掉——worktree 因此能建到 .staffs/worktrees 之外，
+ * 而 "../" 会被 resolve 规范化掉——worktree 因此能建到 .staffs/worktrees 之外，
  * 而我们随后还会往那个目录注入 AGENTS.md、跑 npm install。
  * 分支名同样要合法，否则 git 报的错和真实原因会对不上。
  */
