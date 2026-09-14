@@ -8,7 +8,7 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { extractReceipts, recordReceipts } from "./attempts.ts";
@@ -88,6 +88,31 @@ const mutate = <T>(
 };
 
 const WORKTREE_ROOT = ".staffs/worktrees";
+
+/**
+ * worktree 名 → 目录与分支（票 18 的安全边界）。
+ *
+ * 为什么不能只写 resolve(cwd, WORKTREE_ROOT, params.name)：name 来自模型，
+ * 而 \"../\" 会被 resolve 规范化掉——worktree 因此能建到 .staffs/worktrees 之外，
+ * 而我们随后还会往那个目录注入 AGENTS.md、跑 npm install。
+ * 分支名同样要合法，否则 git 报的错和真实原因会对不上。
+ */
+export const worktreeTarget = (
+   cwd: string,
+   raw: string,
+): { directory: string; branch: string } => {
+   const name = raw.trim().replace(/\\/g, "/");
+   if (!name) throw new Error("staffs_worktree 需要 name");
+   if (!/^[A-Za-z0-9._/-]+$/.test(name))
+      throw new Error(
+         "worktree 名只允许字母、数字、点、下划线、斜杠、短横线：" + raw,
+      );
+   const root = resolve(cwd, WORKTREE_ROOT);
+   const directory = resolve(root, name);
+   if (directory === root || !directory.startsWith(root + sep))
+      throw new Error("worktree 名不得越出 " + WORKTREE_ROOT + "：" + raw);
+   return { directory, branch: "staffs/" + name };
+};
 const AGENTS_BEGIN = "<!-- pi-staffs:begin -->";
 const AGENTS_END = "<!-- pi-staffs:end -->";
 
@@ -121,23 +146,50 @@ export const injectAgentsBlock = (directory: string, block: string): string => {
 };
 
 /** 依赖克隆/安装（票 18 的 clonedeps）：只在真有 package.json 时动手，失败不致命。 */
-export const installDeps = (directory: string): string => {
+export const installDeps = async (directory: string): Promise<string> => {
    if (!existsSync(join(directory, "package.json")))
       return "无 package.json，跳过依赖安装";
+   // 必须走异步 runCli：npm install 动辄几分钟，同步会冻住整个扩展宿主（见 runCli 的注释）。
+   const result = await runCli("npm", ["install", "--no-audit", "--no-fund"], {
+      cwd: directory,
+      timeoutMs: 600_000,
+   });
+   if (result.code === 0) return "依赖已安装（npm install）";
+   const detail = (
+      (result.stderr || result.stdout).trim().split("\n")[0] ?? ""
+   ).slice(0, 200);
+   return (
+      "依赖安装失败（不阻塞）：" +
+      (detail || "npm 退出码 " + String(result.code))
+   );
+};
+
+/**
+ * 读响应正文，但最多只读 maxBytes 字节：超大响应不再整份进内存。
+ * 读够就用 cancel 主动断开，别为了一份我们根本用不上的正文把连接挂着。
+ */
+const readCappedText = async (
+   response: Response,
+   maxBytes: number,
+): Promise<string> => {
+   const body = response.body;
+   if (!body) return "";
+   const reader = body.getReader();
+   const chunks: Uint8Array[] = [];
+   let total = 0;
    try {
-      execFileSync("npm", ["install", "--no-audit", "--no-fund"], {
-         cwd: directory,
-         encoding: "utf8",
-         timeout: 600_000,
-         stdio: ["ignore", "pipe", "pipe"],
-      });
-      return "依赖已安装（npm install）";
-   } catch (error) {
-      return (
-         "依赖安装失败（不阻塞）：" +
-         (error instanceof Error ? error.message.slice(0, 200) : String(error))
-      );
+      while (total < maxBytes) {
+         const { done, value } = await reader.read();
+         if (done) break;
+         if (!value || value.byteLength === 0) continue;
+         const room = maxBytes - total;
+         chunks.push(value.byteLength > room ? value.subarray(0, room) : value);
+         total += Math.min(value.byteLength, room);
+      }
+   } finally {
+      await reader.cancel().catch(() => undefined);
    }
+   return Buffer.concat(chunks).toString("utf8");
 };
 
 /**
@@ -521,8 +573,27 @@ export const registerStaffsTools = (
       }),
       async execute(_id, params, signal) {
          const limit = Math.min(Math.max(params.maxChars ?? 8000, 500), 40_000);
-         const response = await fetch(params.url, { signal });
-         const raw = await response.text();
+         let target: URL;
+         try {
+            target = new URL(params.url);
+         } catch {
+            // 非法 URL 不该是「未处理的异常」，给模型一句能照着改的错。
+            throw new Error("staffs_webfetch 需要合法的绝对 URL：" + params.url.slice(0, 120));
+         }
+         if (target.protocol !== "http:" && target.protocol !== "https:")
+            throw new Error(
+               "staffs_webfetch 只支持 http/https：" + target.protocol,
+            );
+         // 调用方的 signal 只覆盖用户取消；服务端挂着不回时会一直等，所以再叠一个硬超时。
+         const deadline = AbortSignal.timeout(30_000);
+         const response = await fetch(target, {
+            signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+         });
+         // 先按字节封顶再解码：超出上限的部分没必要读（旧实现是 response.text() 全读）。
+         const raw = await readCappedText(
+            response,
+            Math.max(limit, 1024) * 4 + 65_536,
+         );
          const text = raw
             .replace(/<script[\s\S]*?<\/script>/gi, " ")
             .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -560,32 +631,24 @@ export const registerStaffsTools = (
             return reply(out || "（没有 worktree）");
          }
          if (!params.name) throw new Error("staffs_worktree 需要 name");
-         const directory = resolve(cwd, WORKTREE_ROOT, params.name);
+         const { directory, branch } = worktreeTarget(cwd, params.name);
          if (params.op === "remove") {
             git(cwd, ["worktree", "remove", directory, "--force"]);
             return reply("已移除 worktree " + directory);
          }
          mkdirSync(dirname(directory), { recursive: true });
-         git(cwd, [
-            "worktree",
-            "add",
-            directory,
-            "-b",
-            "staffs/" + params.name,
-         ]);
+         git(cwd, ["worktree", "add", directory, "-b", branch]);
          const injected = injectAgentsBlock(
             directory,
             [
                "# Pi-Staffs 隔离工作区",
                "",
-               "- 本目录是一个独立 worktree，分支 `staffs/" +
-                  params.name +
-                  "`。",
+               "- 本目录是一个独立 worktree，分支 `" + branch + "`。",
                "- 只改本目录内的文件；改完回报 diff 摘要与验证命令，不要自行合并。",
                "- 需要跨文件重构或共享状态时，先回话给队长，不要偷偷改主工作区。",
             ].join("\n"),
          );
-         const installed = installDeps(directory);
+         const installed = await installDeps(directory);
          return reply(
             [
                "worktree：" + directory,

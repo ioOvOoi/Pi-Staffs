@@ -16,6 +16,7 @@ import {
    rmSync,
    writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -40,6 +41,18 @@ const assert = (condition, message) => {
 const throws = (fn, pattern) => {
    try {
       fn();
+   } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      assert(pattern.test(text), `错误文本不匹配：${text}`);
+      return;
+   }
+   throw new Error(`预期抛错但没有：${pattern}`);
+};
+
+/** 异步版 throws：execute 是 async，抛错会变成 rejected promise。 */
+const rejects = async (fn, pattern) => {
+   try {
+      await fn();
    } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       assert(pattern.test(text), `错误文本不匹配：${text}`);
@@ -979,7 +992,7 @@ assert(alive.revived === false, "活着的句柄不该被重开");
 ok("reviver：死句柄重拉同角色，活句柄不打扰");
 
 // ---------- 17. worktree 注入 + 缓存安全（票 18/20） ----------
-const { injectAgentsBlock, installDeps } = await load("src/tools.ts");
+const { injectAgentsBlock, installDeps, worktreeTarget } = await load("src/tools.ts");
 const worktree = path.join(sandbox, "worktree");
 mkdirSync(worktree, { recursive: true });
 writeFileSync(path.join(worktree, "AGENTS.md"), "# 人类写的规约\n");
@@ -992,8 +1005,25 @@ assert(
    "重复注入应替换同一块，而不是叠加",
 );
 assert(
-   installDeps(worktree).includes("无 package.json"),
+   (await installDeps(worktree)).includes("无 package.json"),
    "没有 package.json 时应跳过依赖安装",
+);
+const target = worktreeTarget(worktree, "feature-x");
+assert(
+   target.branch === "staffs/feature-x" &&
+      target.directory ===
+         path.join(worktree, ".staffs", "worktrees", "feature-x"),
+   "worktree 名应落到 .staffs/worktrees 下，分支带 staffs/ 前缀",
+);
+for (const bad of ["../escape", "a/../../b", "/abs/x", "C:/abs/x", "bad name", "  "]) {
+   throws(
+      () => worktreeTarget(worktree, bad),
+      /不得越出|需要 name|只允许/,
+   );
+}
+await rejects(
+   () => tools.get("staffs_worktree").execute("id", { op: "remove", name: "../../etc" }),
+   /不得越出|只允许|需要 name/,
 );
 const hooksMod = await load("src/hooks.ts");
 assert(
@@ -1008,7 +1038,38 @@ assert(
    hooksMod.buildTurnInjection(stateMod.emptyState(1_000), 1_000) === "",
    "空状态不该注入任何文本（缓存前缀稳定）",
 );
-ok("worktree：注入块幂等；缓存：prelude 稳定、空状态零注入");
+ok("worktree：注入块幂等；越界名被拒；缓存：prelude 稳定、空状态零注入");
+
+// ---------- 17b. webfetch：协议白名单 + 响应字节封顶 ----------
+const server = createServer((_request, response) => {
+   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+   response.end("<p>" + "x".repeat(2_000_000) + "</p>");
+});
+await new Promise((done) => server.listen(0, "127.0.0.1", done));
+const port = server.address().port;
+const webfetch = tools.get("staffs_webfetch");
+const fetched = await webfetch.execute("id", {
+   url: `http://127.0.0.1:${port}/`,
+   maxChars: 1_000,
+});
+assert(
+   fetched.content[0].text.length <= 1_100,
+   "正文必须按 maxChars 截断后才进上下文",
+);
+assert(
+   fetched.details.length > 1_000,
+   "服务端确实发了 2MB：截断应发生在输出侧，而不是读不到内容",
+);
+await rejects(
+   () => webfetch.execute("id", { url: "file:///etc/passwd" }),
+   /只支持 http\/https/,
+);
+await rejects(
+   () => webfetch.execute("id", { url: "不是 URL" }),
+   /需要合法的绝对 URL/,
+);
+server.close();
+ok("webfetch：非 http(s) 直接拒收；2MB 响应按字节封顶");
 
 // ---------- 18. 观测层（票 15）：footer 相位判定 / 面板行 / 开关 ----------
 const obsNow = 2_000_000;
