@@ -33,6 +33,7 @@ git submodule add https://github.com/ioOvOoi/Pi-Staffs.git selfex/Pi-Staffs
 /staffs                    # 看角色与当前档位
 /staffs preset             # 列出可用档位
 /staffs preset cheap       # 切档位（本会话后续派发生效）
+/staffs roles              # 面板调参：逐角色改模型与思考强度
 /staffs skills             # 看随包技能
 /staffs board              # 看板
 /staffs doctor             # 体检（模型能否解析、引擎白名单、看板计数）

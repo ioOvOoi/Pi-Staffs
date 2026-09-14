@@ -20,6 +20,8 @@ import { extractReceipts, recordReceipts } from "./attempts.ts";
 import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
 import { formatDoctorReport, registerStaffsTools } from "./tools.ts";
 import { listStaffsSkills, syncStaffsSkills } from "./skills.ts";
+import { openRolesPanel } from "./roles-panel.ts";
+import type { SelectItem } from "@earendil-works/pi-tui";
 import {
    footerSummary,
    formatBoard,
@@ -28,7 +30,7 @@ import {
    type StaffsState,
 } from "./state.ts";
 
-export const PI_STAFFS_VERSION = "1.1.1";
+export const PI_STAFFS_VERSION = "1.2.0";
 
 /**
  * 派发指引（写进 system prompt）。为什么必须显式写：子 agent 只看到父会话传来的 task，
@@ -209,6 +211,45 @@ export default function piStaffs(pi: ExtensionAPI): void {
             return;
          }
 
+         if (requested === "roles" || requested.startsWith("roles ")) {
+            // 交互面板：逐角色调模型与思考档。写回语义见 roles-panel.applyRoleChange；
+            // 这里把 ctx 能力（模型清单、提示）注入进去，面板逻辑保持无宿主依赖、可冒烟。
+            await openRolesPanel(ctx, {
+               load: () => loadStaffsConfig(),
+               save: (next, at) => {
+                  writeStaffsConfig(next, at);
+                  cache = { config: next, path: at };
+               },
+               aliases: () => readAliases(fabricConfigPath()),
+               models: () => {
+                  // scopedModels 与内建 /model 选择器同源；为空才枚举全量目录。
+                  // Model 形状按 provider+id 防御性读取：id 自带斜杠就不再拼 provider。
+                  const holder = ctx as unknown as {
+                     scopedModels?: ReadonlyArray<{ model: unknown }>;
+                     modelRegistry?: { getAvailable?: () => unknown[] };
+                  };
+                  const scoped = holder.scopedModels ?? [];
+                  const source: unknown[] = scoped.length
+                     ? scoped.map((entry) => entry.model)
+                     : (holder.modelRegistry?.getAvailable?.() ?? []);
+                  const items: SelectItem[] = [];
+                  const seen = new Set<string>();
+                  for (const model of source) {
+                     const record = (model ?? {}) as { provider?: unknown; id?: unknown };
+                     const provider = typeof record.provider === "string" ? record.provider : "";
+                     const id = typeof record.id === "string" ? record.id : "";
+                     const ref = id.includes("/") ? id : provider && id ? `${provider}/${id}` : id || provider;
+                     if (!ref || seen.has(ref)) continue;
+                     seen.add(ref);
+                     items.push({ value: ref, label: ref });
+                  }
+                  return items;
+               },
+               notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
+            });
+            return;
+         }
+
          if (requested === "skills" || requested.startsWith("skills ")) {
             const skills = listStaffsSkills();
             if (requested.slice("skills".length).trim() === "sync") {
@@ -283,7 +324,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
          );
          const council = resolveCouncilModels(config, aliases);
          ctx.ui.notify(
-            `Pi-Staffs ${PI_STAFFS_VERSION} — ${path}\n档位：${activePresetName(config) || "（无）"}｜可用：${available.join(", ") || "（空）"}\n${lines.join("\n")}\n合议：${council.join(", ") || "（未配置 council.members / roles.council.councilMembers）"}\n派发：fabric_exec 里 staffs.run({ role, task })；切档位：/staffs preset <名字>；看板：/staffs board；观测层：/staffs panel <footer|widget|off>；体检：/staffs doctor`,
+            `Pi-Staffs ${PI_STAFFS_VERSION} — ${path}\n档位：${activePresetName(config) || "（无）"}｜可用：${available.join(", ") || "（空）"}\n${lines.join("\n")}\n合议：${council.join(", ") || "（未配置 council.members / roles.council.councilMembers）"}\n派发：fabric_exec 里 staffs.run({ role, task })；切档位：/staffs preset <名字>；调参：/staffs roles；看板：/staffs board；观测层：/staffs panel <footer|widget|off>；体检：/staffs doctor`,
             "info",
          );
          for (const issue of outcome.issues)
