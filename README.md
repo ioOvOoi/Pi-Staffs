@@ -132,7 +132,7 @@ await staffs.council({ task: "…" });   // 多模型合议（先 staffs.preflig
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm run smoke       # 契约冒烟 36 项，不启动 Pi
+npm run smoke       # 契约冒烟 38 项，不启动 Pi
 ```
 
 冒烟覆盖：装载与钩子、配置校验与旧字段兼容、档位解析、prelude（宿主侧解释别名）、内核重试矩阵、预检、复审、体检、工具白名单、观测层、技能同步、状态机、tracker、合议、reviver、worktree、prompt cache 前缀稳定、发版清单。

@@ -91,9 +91,8 @@ export const phaseReminder = (
             stalled
                .map((attempt) => attempt.id + "(" + attempt.role + ")")
                .join(", ") +
-            "——心跳静默超阈值；用 staffs.task('status'|" +
-            "'stop'|" +
-            "'revive') 处理。",
+            "——心跳静默超阈值；staffs.task('status'|'stop') 查看/停止，" +
+            "staffs.revive({ id, task }) 原地复活。",
       );
    return lines.join("\n");
 };

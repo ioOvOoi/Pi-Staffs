@@ -61,6 +61,18 @@ export const checkRolePermissions = (
    const needsAsk = tools.filter(
       (tool) => !denied.includes(tool) && covers(permissions.ask, tool),
    );
+   // 通配与 deny 互斥（评审 P0-1）：covers 只做字面量匹配，"*" 永远不在 deny 清单里，
+   // 所以 tools 含 "*" 时 deny 形同虚设——配置者以为禁了，实际全放行。
+   // 宁可预检期报配置错，绝不静默放行。
+   if (tools.includes("*") && (permissions.deny ?? []).length) {
+      return {
+         role: name,
+         allowed: false,
+         denied: [],
+         needsAsk: [],
+         reason: `角色 ${name} 的 tools 含 "*"，deny（${(permissions.deny ?? []).join(", ")}）约束不了通配；请把 tools 展开成显式清单再配 deny`,
+      };
+   }
    if (denied.length) {
       return {
          role: name,

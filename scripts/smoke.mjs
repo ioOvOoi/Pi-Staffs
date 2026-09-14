@@ -1238,6 +1238,79 @@ assert(
 );
 ok("钩子：turn_end 重读状态后再落盘（不抹工具刚写的数据）");
 
+// ---------- 21. 安全边界（评审第一批）：通配 deny / 路径锁 / ref 校验 / 票 id / Windows npm ----------
+const sec21Perms = await load("src/permissions.ts");
+const sec21Wild = sec21Perms.checkRolePermissions("wild", {
+   instructions: "x",
+   model: "p/x",
+   thinking: "off",
+   tools: ["*"],
+   permissions: { deny: ["bash"] },
+});
+assert(
+   !sec21Wild.allowed && sec21Wild.reason.includes("*"),
+   "tools 含 * 且配了 deny 必须预检失败，而不是静默放行",
+);
+const sec21Tools = await load("src/tools.ts");
+assert(
+   (() => {
+      try {
+         sec21Tools.resolveInside("/repo", "../evil.md");
+         return false;
+      } catch {
+         return true;
+      }
+   })(),
+   "resolveInside 必须拒绝越出项目目录的相对路径",
+);
+assert(
+   sec21Tools.resolveInside("/repo", "a/b.md") === path.resolve("/repo", "a/b.md"),
+   "resolveInside 放行项目内路径",
+);
+assert(
+   (() => {
+      try {
+         sec21Tools.assertSafeGitRef("--output=x");
+         return false;
+      } catch {
+         return true;
+      }
+   })(),
+   "git base 以 - 开头必须拒绝",
+);
+assert(
+   sec21Tools.assertSafeGitRef("HEAD~2") === "HEAD~2",
+   "正常 ref 放行",
+);
+const sec21Tracker = await load("src/tracker.ts");
+const sec21Local = sec21Tracker.localMarkdownTracker(
+   path.join(sandbox, "tracker"),
+);
+let sec21Rejected = false;
+try {
+   await sec21Local.writeState("../evil", "done", "");
+} catch {
+   sec21Rejected = true;
+}
+assert(sec21Rejected, "票 id 含路径分隔必须拒绝（目录穿越）");
+assert(
+   (await sec21Local.fetchIssue("T-1")) === undefined,
+   "合法 id 不存在时返回 undefined 而不是抛错",
+);
+// installDeps 端到端：空依赖项目必须真装上（win32 同时验证 cmd.exe 垫片）。
+const sec21Deps = path.join(sandbox, "deps");
+mkdirSync(sec21Deps, { recursive: true });
+writeFileSync(
+   path.join(sec21Deps, "package.json"),
+   JSON.stringify({ name: "smoke-deps", version: "0.0.0" }),
+);
+const sec21Install = await sec21Tools.installDeps(sec21Deps);
+assert(
+   sec21Install.startsWith("依赖已安装"),
+   "installDeps 必须真装上（win32 走 cmd.exe 垫片），实际：" + sec21Install,
+);
+ok("安全边界：通配 deny 报错；interview/astgrep 路径锁；git ref 校验；票 id 白名单；npm 安装可用");
+
 rmSync(sandbox, { recursive: true, force: true });
 
 console.log(`smoke ok（${checks.length} 项）：`);

@@ -77,7 +77,12 @@ export const parseFrontmatter = (
 export const localMarkdownTracker = (
    directory: string = join(process.cwd(), ".scratch", "pi-staffs", "issues"),
 ): TrackerAdapter => {
-   const fileOf = (id: string): string => join(directory, `${id}.md`);
+   // 票 id 边界（评审 P0-5）：id 可能来自模型输入，直接拼路径等于开放目录穿越。
+   const fileOf = (id: string): string => {
+      if (!/^[A-Za-z0-9#_-]+$/.test(id))
+         throw new Error("票 id 只允许字母、数字、#、下划线、短横线：" + id);
+      return join(directory, `${id}.md`);
+   };
    return {
       name: "local-markdown",
       async listCandidates() {

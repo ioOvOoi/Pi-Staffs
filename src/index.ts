@@ -28,7 +28,7 @@ import {
    type StaffsState,
 } from "./state.ts";
 
-export const PI_STAFFS_VERSION = "1.0.0";
+export const PI_STAFFS_VERSION = "1.1.1";
 
 /**
  * 派发指引（写进 system prompt）。为什么必须显式写：子 agent 只看到父会话传来的 task，

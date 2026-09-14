@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.1
+
+安全加固（评审第一批）：模型可控输入一律锁回项目边界。
+
+- deny 与 `tools: ["*"]` 语义互斥：预检期直接报配置错，不再静默放行。
+- `staffs_interview` 的 output、`staffs_astgrep` 的 path 锁回项目目录。
+- review 的 git diff base 拒绝以 `-` 开头（防 `--output=` 写任意文件）。
+- 票 id 白名单校验，堵住 tracker 的路径穿越。
+- Windows：npm 走 cmd.exe 垫片（Node 对 .cmd 直启一律 EINVAL，CVE-2024-27980），worktree 依赖安装不再必败。
+- 看板提醒修正：卡死处置用 `staffs.revive`（`staffs.task` 并无 revive 操作）。
+- 版本常量与 package.json 对齐；smoke 新增 8 项断言。
+
 ## 1.1.0
 
 治本：prelude 改走 `fabric_exec` 的 `prelude` 入参，不再往模型代码里拼字符串。

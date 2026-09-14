@@ -123,6 +123,24 @@ const git = (cwd: string, args: string[]): string =>
       stdio: ["ignore", "pipe", "pipe"],
    }).trim();
 
+/** git ref 安全校验（评审 P0-3）：execFile 不走 shell，注入面只剩参数本身——
+ * base 以 "-" 开头会被 git 当作选项（如 --output= 可写任意文件）。 */
+export const assertSafeGitRef = (base: string): string => {
+   const value = base.trim();
+   if (!value || value.startsWith("-"))
+      throw new Error("非法的 git base（不得为空、不得以 - 开头）：" + base);
+   return value;
+};
+
+/** 把模型给的路径锁回项目目录内（评审 P0-2/P0-4 的共同纪律）。 */
+export const resolveInside = (cwd: string, raw: string): string => {
+   const root = resolve(cwd);
+   const target = resolve(cwd, raw);
+   if (target !== root && !target.startsWith(root + sep))
+      throw new Error("路径不得越出项目目录：" + raw);
+   return target;
+};
+
 /**
  * 给 worktree 注入 AGENTS.md 块（票 18）。
  * 为什么用块标记：同一文件可能已经有人类写的规约，重写整文件会把人家的内容冲掉。
@@ -150,10 +168,19 @@ export const installDeps = async (directory: string): Promise<string> => {
    if (!existsSync(join(directory, "package.json")))
       return "无 package.json，跳过依赖安装";
    // 必须走异步 runCli：npm install 动辄几分钟，同步会冻住整个扩展宿主（见 runCli 的注释）。
-   const result = await runCli("npm", ["install", "--no-audit", "--no-fund"], {
-      cwd: directory,
-      timeoutMs: 600_000,
-   });
+   // Windows 特例（评审 P1-3）：npm 全局装出来的是 npm.cmd 垫片，Node 对 .cmd 直启一律
+   // EINVAL（CVE-2024-27980 防护），所以这里垫 cmd.exe /c。参数全静态、无空格，不引入
+   // 注入面——动态参数的调用（acp 的 prompt、ast-grep 的模式串）绝不能这么垫。
+   const npmArgs = ["install", "--no-audit", "--no-fund"];
+   const useShim = process.platform === "win32";
+   const result = await runCli(
+      useShim ? "cmd.exe" : "npm",
+      useShim ? ["/d", "/s", "/c", "npm", ...npmArgs] : npmArgs,
+      {
+         cwd: directory,
+         timeoutMs: 600_000,
+      },
+   );
    if (result.code === 0) return "依赖已安装（npm install）";
    const detail = (
       (result.stderr || result.stdout).trim().split("\n")[0] ?? ""
@@ -672,7 +699,8 @@ export const registerStaffsTools = (
          output: Type.Optional(Type.String()),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
-         const target = resolve(
+         // output 来自模型，锁回项目目录（评审 P0-2）：不设界等于给了任意写。
+         const target = resolveInside(
             cwd,
             params.output ?? join(".staffs", "interview.md"),
          );
@@ -768,6 +796,8 @@ export const registerStaffsTools = (
          ),
       }),
       async execute(_id, params) {
+         // path 来自模型，而 --update-all 会改盘：锁回项目目录（评审 P0-4）。
+         if (params.path !== undefined) resolveInside(cwd, params.path);
          const probe = await runCli("ast-grep", ["--version"], {
             cwd,
             timeoutMs: 15000,
@@ -884,7 +914,8 @@ export const registerStaffsTools = (
          if (diff === undefined) {
             const base = params.base ?? "HEAD";
             try {
-               diff = git(cwd, ["diff", base]);
+               // base 来自模型，防参数注入（评审 P0-3）：拒绝以 - 开头的 ref。
+               diff = git(cwd, ["diff", assertSafeGitRef(base)]);
             } catch (error) {
                diff = `（取 git diff ${base} 失败：${error instanceof Error ? error.message : String(error)}）`;
             }
