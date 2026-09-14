@@ -13,6 +13,7 @@ import {
    mkdirSync,
    mkdtempSync,
    readFileSync,
+   readdirSync,
    rmSync,
    writeFileSync,
 } from "node:fs";
@@ -228,6 +229,11 @@ process.env.PI_FABRIC_PARENT_RUN = "1";
 assert(
    (await hooks.get("before_agent_start")({ systemPrompt: "S" })) === undefined,
    "子 agent 会话不该再注入指引",
+);
+delete process.env.PI_FABRIC_PARENT_RUN;
+assert(
+   process.env.PI_FABRIC_PARENT_RUN === undefined,
+   "PI_FABRIC_PARENT_RUN 必须还原，否则后续断言都跑在子会话语境里",
 );
 ok("before_agent_start：只给顶层会话注入派发指引");
 
@@ -992,7 +998,8 @@ assert(alive.revived === false, "活着的句柄不该被重开");
 ok("reviver：死句柄重拉同角色，活句柄不打扰");
 
 // ---------- 17. worktree 注入 + 缓存安全（票 18/20） ----------
-const { injectAgentsBlock, installDeps, worktreeTarget } = await load("src/tools.ts");
+const { injectAgentsBlock, installDeps, worktreeTarget } =
+   await load("src/tools.ts");
 const worktree = path.join(sandbox, "worktree");
 mkdirSync(worktree, { recursive: true });
 writeFileSync(path.join(worktree, "AGENTS.md"), "# 人类写的规约\n");
@@ -1015,14 +1022,21 @@ assert(
          path.join(worktree, ".staffs", "worktrees", "feature-x"),
    "worktree 名应落到 .staffs/worktrees 下，分支带 staffs/ 前缀",
 );
-for (const bad of ["../escape", "a/../../b", "/abs/x", "C:/abs/x", "bad name", "  "]) {
-   throws(
-      () => worktreeTarget(worktree, bad),
-      /不得越出|需要 name|只允许/,
-   );
+for (const bad of [
+   "../escape",
+   "a/../../b",
+   "/abs/x",
+   "C:/abs/x",
+   "bad name",
+   "  ",
+]) {
+   throws(() => worktreeTarget(worktree, bad), /不得越出|需要 name|只允许/);
 }
 await rejects(
-   () => tools.get("staffs_worktree").execute("id", { op: "remove", name: "../../etc" }),
+   () =>
+      tools
+         .get("staffs_worktree")
+         .execute("id", { op: "remove", name: "../../etc" }),
    /不得越出|只允许|需要 name/,
 );
 const hooksMod = await load("src/hooks.ts");
@@ -1264,7 +1278,8 @@ assert(
    "resolveInside 必须拒绝越出项目目录的相对路径",
 );
 assert(
-   sec21Tools.resolveInside("/repo", "a/b.md") === path.resolve("/repo", "a/b.md"),
+   sec21Tools.resolveInside("/repo", "a/b.md") ===
+      path.resolve("/repo", "a/b.md"),
    "resolveInside 放行项目内路径",
 );
 assert(
@@ -1278,10 +1293,7 @@ assert(
    })(),
    "git base 以 - 开头必须拒绝",
 );
-assert(
-   sec21Tools.assertSafeGitRef("HEAD~2") === "HEAD~2",
-   "正常 ref 放行",
-);
+assert(sec21Tools.assertSafeGitRef("HEAD~2") === "HEAD~2", "正常 ref 放行");
 const sec21Tracker = await load("src/tracker.ts");
 const sec21Local = sec21Tracker.localMarkdownTracker(
    path.join(sandbox, "tracker"),
@@ -1309,7 +1321,42 @@ assert(
    sec21Install.startsWith("依赖已安装"),
    "installDeps 必须真装上（win32 走 cmd.exe 垫片），实际：" + sec21Install,
 );
-ok("安全边界：通配 deny 报错；interview/astgrep 路径锁；git ref 校验；票 id 白名单；npm 安装可用");
+ok(
+   "安全边界：通配 deny 报错；interview/astgrep 路径锁；git ref 校验；票 id 白名单；npm 安装可用",
+);
+// ---------- 22. 坏状态文件回归（P1-2）：readState 留证改名，writeState 照常落新文件 ----------
+const sec22Dir = mkdtempSync(path.join(sandbox, "sec22-"));
+const sec22Bad = "state.json 内容不是合法 JSON{{{";
+const sec22File = path.join(sec22Dir, "state.json");
+writeFileSync(sec22File, sec22Bad, "utf8");
+const sec22Read = stateMod.readState(sec22File);
+assert(
+   sec22Read.tasks.length === 0 && sec22Read.mailbox.length === 0,
+   "坏文件应退回空态，而不是抛错或回半截数据",
+);
+const sec22Entries = readdirSync(sec22Dir);
+const sec22Corrupt = sec22Entries.find((name) =>
+   name.startsWith("state.json.corrupt-"),
+);
+assert(
+   sec22Corrupt !== undefined,
+   "readState 应把坏文件改名留存：" + sec22Entries.join(","),
+);
+assert(
+   readFileSync(path.join(sec22Dir, sec22Corrupt), "utf8") === sec22Bad,
+   "留证件内容必须等于原坏文件（证据不丢）",
+);
+assert(!existsSync(sec22File), "改名成功后原路径不该再存在");
+stateMod.writeState(stateMod.emptyState(2_000), sec22File);
+assert(
+   stateMod.readState(sec22File).stateVersion === 1,
+   "writeState 应正常落新文件并被读回",
+);
+assert(
+   existsSync(path.join(sec22Dir, sec22Corrupt)),
+   "写新文件后留证件必须还在（不能把证据抹掉）",
+);
+ok("坏状态文件：readState 留证改名并回空态，writeState 正常落新文件");
 
 rmSync(sandbox, { recursive: true, force: true });
 

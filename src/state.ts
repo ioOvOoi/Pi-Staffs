@@ -105,27 +105,64 @@ export const emptyState = (now: number = Date.now()): StaffsState => ({
    mailbox: [],
 });
 
+/**
+ * 坏文件证据保全（P1-2）：解析失败的 state.json 改名保留为 <原路径>.corrupt-<毫秒时间戳>，
+ * 而不是直接覆盖——否则下一次写盘会把用户的任务与信箱永久抹掉。
+ */
+const preserveCorrupt = (path: string): void => {
+   try {
+      renameSync(path, `${path}.corrupt-${Date.now()}`);
+   } catch {
+      // 改名失败（并发/IO 抖动）也不阻塞调用方：宁可覆盖也不让会话卡在坏文件上。
+   }
+};
+
+/** 写前体检：目标文件还在但解析失败（readState 没能改名保留的残留），先留证再写（P1-2）。 */
+const quarantineIfCorrupt = (path: string): void => {
+   if (!existsSync(path)) return;
+   let rawContent = "";
+   try {
+      rawContent = readFileSync(path, "utf8");
+   } catch {
+      // 连读都读不了（锁/权限）：不猜内容，放行让下方写盘自行决定成败。
+      return;
+   }
+   try {
+      JSON.parse(rawContent);
+   } catch {
+      preserveCorrupt(path);
+   }
+};
+
 /** 读状态：不存在/坏 JSON 都退回空态。为什么不忍错：状态可重建，一个坏文件不该卡住会话。 */
 export const readState = (
    path: string = statePath(),
    now: number = Date.now(),
 ): StaffsState => {
    if (!existsSync(path)) return emptyState(now);
+   let rawContent = "";
    try {
-      const raw = JSON.parse(
-         readFileSync(path, "utf8"),
-      ) as Partial<StaffsState>;
-      return {
-         ...emptyState(now),
-         ...raw,
-         stateVersion: STATE_VERSION,
-         attempts: Array.isArray(raw.attempts) ? raw.attempts : [],
-         tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
-         mailbox: Array.isArray(raw.mailbox) ? raw.mailbox : [],
-      };
+      rawContent = readFileSync(path, "utf8");
    } catch {
+      // 读失败（权限/IO 抖动）与坏文件不同：文件没被动过，直接回空态，下次再试。
       return emptyState(now);
    }
+   let raw: Partial<StaffsState> = {};
+   try {
+      raw = JSON.parse(rawContent) as Partial<StaffsState>;
+   } catch {
+      // 坏文件先改名留证再回空态：不处理的话，下一次写盘会把原有数据永久抹掉（P1-2）。
+      preserveCorrupt(path);
+      return emptyState(now);
+   }
+   return {
+      ...emptyState(now),
+      ...raw,
+      stateVersion: STATE_VERSION,
+      attempts: Array.isArray(raw.attempts) ? raw.attempts : [],
+      tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
+      mailbox: Array.isArray(raw.mailbox) ? raw.mailbox : [],
+   };
 };
 
 /** 原子写（与 config.ts 同一手法：临时文件 + fsync + rename，权限 0600）。 */
@@ -133,6 +170,8 @@ export const writeState = (
    state: StaffsState,
    path: string = statePath(),
 ): string => {
+   // 目标若还是坏文件（上一次 readState 没能改名保留的残留），先留证再写，避免覆盖丢数据（P1-2）。
+   quarantineIfCorrupt(path);
    mkdirSync(dirname(path), { recursive: true });
    const temporary = `${path}.${process.pid}.tmp`;
    const descriptor = openSync(temporary, "w", 0o600);

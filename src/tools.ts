@@ -6,7 +6,7 @@
  *
  * 状态一律走 state.ts 的路径解析（环境变量优先），所以冒烟测试能把整条链跑在临时目录里。
  */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { Type } from "typebox";
@@ -116,12 +116,20 @@ export const worktreeTarget = (
 const AGENTS_BEGIN = "<!-- pi-staffs:begin -->";
 const AGENTS_END = "<!-- pi-staffs:end -->";
 
-const git = (cwd: string, args: string[]): string =>
-   execFileSync("git", args, {
+/** git 统一出口：必须走异步 runCli（带超时、windowsHide），execFileSync 会冻住宿主数秒。 */
+const git = async (cwd: string, args: string[]): Promise<string> => {
+   const result = await runCli("git", args, {
       cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-   }).trim();
+      // worktree add/remove 与 diff 一般秒级；给 60s 防大仓库 diff 被误杀。
+      timeoutMs: 60_000,
+   });
+   if (result.code !== 0) {
+      const detail =
+         (result.stderr || result.stdout).trim() || `git 退出码 ${result.code}`;
+      throw new Error(`git ${args.join(" ")} 失败：${detail.slice(0, 300)}`);
+   }
+   return result.stdout.trim();
+};
 
 /** git ref 安全校验（评审 P0-3）：execFile 不走 shell，注入面只剩参数本身——
  * base 以 "-" 开头会被 git 当作选项（如 --output= 可写任意文件）。 */
@@ -516,7 +524,16 @@ export const registerStaffsTools = (
          }
          if (params.op === "import") {
             const added = await importCandidates(state, adapter);
-            writeState(state, currentStatePath());
+            // 读改写窗口：await 期间可能有并发调用（另一个 import/close/record）先写回 state，
+            // 直接写这份旧快照会整份覆盖。治本：重读最新 state，只并入新增任务（按 id 去重）。
+            const latest = readState(currentStatePath());
+            const known = new Set(latest.tasks.map((task) => task.id));
+            const fresh = added.filter((task) => !known.has(task.id));
+            if (fresh.length) {
+               latest.tasks.push(...fresh);
+               latest.updatedAt = Date.now();
+               writeState(latest, currentStatePath());
+            }
             return reply(
                added.length
                   ? "已导入：" + added.map((task) => task.id).join(", ")
@@ -605,7 +622,10 @@ export const registerStaffsTools = (
             target = new URL(params.url);
          } catch {
             // 非法 URL 不该是「未处理的异常」，给模型一句能照着改的错。
-            throw new Error("staffs_webfetch 需要合法的绝对 URL：" + params.url.slice(0, 120));
+            throw new Error(
+               "staffs_webfetch 需要合法的绝对 URL：" +
+                  params.url.slice(0, 120),
+            );
          }
          if (target.protocol !== "http:" && target.protocol !== "https:")
             throw new Error(
@@ -654,17 +674,17 @@ export const registerStaffsTools = (
       }),
       async execute(_id, params) {
          if (params.op === "list") {
-            const out = git(cwd, ["worktree", "list", "--porcelain"]);
+            const out = await git(cwd, ["worktree", "list", "--porcelain"]);
             return reply(out || "（没有 worktree）");
          }
          if (!params.name) throw new Error("staffs_worktree 需要 name");
          const { directory, branch } = worktreeTarget(cwd, params.name);
          if (params.op === "remove") {
-            git(cwd, ["worktree", "remove", directory, "--force"]);
+            await git(cwd, ["worktree", "remove", directory, "--force"]);
             return reply("已移除 worktree " + directory);
          }
          mkdirSync(dirname(directory), { recursive: true });
-         git(cwd, ["worktree", "add", directory, "-b", branch]);
+         await git(cwd, ["worktree", "add", directory, "-b", branch]);
          const injected = injectAgentsBlock(
             directory,
             [
@@ -915,7 +935,7 @@ export const registerStaffsTools = (
             const base = params.base ?? "HEAD";
             try {
                // base 来自模型，防参数注入（评审 P0-3）：拒绝以 - 开头的 ref。
-               diff = git(cwd, ["diff", assertSafeGitRef(base)]);
+               diff = await git(cwd, ["diff", assertSafeGitRef(base)]);
             } catch (error) {
                diff = `（取 git diff ${base} 失败：${error instanceof Error ? error.message : String(error)}）`;
             }
