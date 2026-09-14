@@ -210,20 +210,28 @@ export const upsertAttempt = (
    state: StaffsState,
    input: Partial<Attempt> & { role: string },
    now: number = Date.now(),
-): Attempt => {
+): { attempt: Attempt; applied: boolean } => {
    const existing = input.id
       ? state.attempts.find((attempt) => attempt.id === input.id)
       : undefined;
+   // 守卫（P1-8 下沉）：已结终态的记录不许被迟到/重放的结果改写（AgentTeams 不变量），
+   // 心跳也不动，保持结终时刻原貌；owner 双方都已知且不同（转派后）时同样跳过。
    if (existing) {
+      if (existing.phase === "settled") return { attempt: existing, applied: false };
+      if (existing.owner && input.owner && existing.owner !== input.owner)
+         return { attempt: existing, applied: false };
       existing.heartbeatAt = now;
       existing.phase = input.phase ?? existing.phase;
       existing.terminal = input.terminal ?? existing.terminal;
       if (input.model) existing.model = input.model;
       if (input.taskId) existing.taskId = input.taskId;
       if (input.notes?.length) existing.notes.push(...input.notes);
-      if (existing.phase === "settled") existing.finishedAt ??= now;
+      if (existing.phase === "settled") {
+         // 回执自带的结终时刻（entry.at）优先，缺省才落当前时钟。
+         existing.finishedAt ??= input.finishedAt ?? now;
+      }
       state.updatedAt = now;
-      return existing;
+      return { attempt: existing, applied: true };
    }
    const attempt: Attempt = {
       id: input.id ?? nextId("attempt", state.attempts),
@@ -234,12 +242,14 @@ export const upsertAttempt = (
       taskId: input.taskId,
       owner: input.owner,
       startedAt: input.startedAt ?? now,
+      // 新建即结终（回执路径）也要有 finishedAt，与 settleAttempt 对齐（遗留 ①）。
+      finishedAt: input.phase === "settled" ? (input.finishedAt ?? now) : undefined,
       heartbeatAt: now,
       notes: input.notes ?? [],
    };
    state.attempts.push(attempt);
    state.updatedAt = now;
-   return attempt;
+   return { attempt, applied: true };
 };
 
 /** 结终态。已 settled 的 attempt 不再改写——迟到的结果不许覆盖新 attempt（AgentTeams 不变量）。 */

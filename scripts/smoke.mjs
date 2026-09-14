@@ -1470,25 +1470,119 @@ const attempts25 = await load("src/attempts.ts");
 const state25mod = await load("src/state.ts");
 const extract25 = attempts25.extractReceipts;
 const pretty25 = (fields = {}) =>
-   JSON.stringify({ marker: attempts25.RECEIPT_MARKER, attempts: [{ id: "a1", ok: true }], ...fields }, null, 2) + "\n";
+   JSON.stringify(
+      {
+         marker: attempts25.RECEIPT_MARKER,
+         attempts: [{ id: "a1", ok: true }],
+         ...fields,
+      },
+      null,
+      2,
+   ) + "\n";
 assert(extract25(pretty25()).length === 1, "行首 marker 真回执可认");
-assert(extract25(pretty25().replace(attempts25.RECEIPT_MARKER, "evil/v9")).length === 0, "伪造 marker 丢弃");
-assert(extract25("前文 " + attempts25.RECEIPT_MARKER + " 中段\n" + pretty25()).length === 1, "文本中段 marker 不误配");
-assert(extract25('{"marker":"' + attempts25.RECEIPT_MARKER + '","attempts":[]}').length === 0, "内联 JSON 忽略");
-assert(extract25('err: "brace { x",\n' + pretty25()).length === 1, "花括号错误文本不吞真回执");
-const t25 = extract25(
-   JSON.stringify({ marker: attempts25.RECEIPT_MARKER, evil: 1, attempts: [{ id: "a", evil: "x" }] }, null, 2),
+assert(
+   extract25(pretty25().replace(attempts25.RECEIPT_MARKER, "evil/v9"))
+      .length === 0,
+   "伪造 marker 丢弃",
 );
-assert(t25.length === 1 && !("evil" in t25[0]) && !("evil" in t25[0].attempts[0]), "白名单剔除多余字段");
-const rec25 = (owner, id) =>
-   [{ marker: attempts25.RECEIPT_MARKER, role: "r", attempts: [{ id, role: "r", at: 7, ok: true, kind: "ok" }] }];
+assert(
+   extract25("前文 " + attempts25.RECEIPT_MARKER + " 中段\n" + pretty25())
+      .length === 1,
+   "文本中段 marker 不误配",
+);
+assert(
+   extract25('{"marker":"' + attempts25.RECEIPT_MARKER + '","attempts":[]}')
+      .length === 0,
+   "内联 JSON 忽略",
+);
+assert(
+   extract25('err: "brace { x",\n' + pretty25()).length === 1,
+   "花括号错误文本不吞真回执",
+);
+const t25 = extract25(
+   JSON.stringify(
+      {
+         marker: attempts25.RECEIPT_MARKER,
+         evil: 1,
+         attempts: [{ id: "a", evil: "x" }],
+      },
+      null,
+      2,
+   ),
+);
+assert(
+   t25.length === 1 && !("evil" in t25[0]) && !("evil" in t25[0].attempts[0]),
+   "白名单剔除多余字段",
+);
+const rec25 = (owner, id) => [
+   {
+      marker: attempts25.RECEIPT_MARKER,
+      role: "r",
+      attempts: [{ id, role: "r", at: 7, ok: true, kind: "ok" }],
+   },
+];
 const p25 = path.join(sandbox, "state25.json");
-const first25 = attempts25.recordReceipts(rec25("host", "x"), { path: p25, owner: "host", now: 1 });
-const second25 = attempts25.recordReceipts(rec25("host", "x"), { path: p25, owner: "host", now: 2 });
-assert(first25.recorded === 1 && second25.recorded === 0, "settled 重放不再覆盖/重复记账");
-assert(attempts25.recordReceipts(rec25("other", "x"), { path: p25, owner: "other", now: 3 }).recorded === 0, "owner 不同不覆盖");
-assert(state25mod.readState(p25).attempts[0].owner === "host", "旧 attempt 记录未被污染");
+const first25 = attempts25.recordReceipts(rec25("host", "x"), {
+   path: p25,
+   owner: "host",
+   now: 1,
+});
+const second25 = attempts25.recordReceipts(rec25("host", "x"), {
+   path: p25,
+   owner: "host",
+   now: 2,
+});
+assert(
+   first25.recorded === 1 && second25.recorded === 0,
+   "settled 重放不再覆盖/重复记账",
+);
+assert(
+   attempts25.recordReceipts(rec25("other", "x"), {
+      path: p25,
+      owner: "other",
+      now: 3,
+   }).recorded === 0,
+   "owner 不同不覆盖",
+);
+assert(
+   state25mod.readState(p25).attempts[0].owner === "host",
+   "旧 attempt 记录未被污染",
+);
 ok("评审第三批·车道 A：回执提取加固 + 记账守卫");
+
+// ---------- 26. 遗留 ①②：回执结终时刻 + settled/owner 守卫下沉 upsertAttempt ----------
+const state26mod = await load("src/state.ts");
+const attempts26 = await load("src/attempts.ts");
+const st26 = state26mod.emptyState(3);
+const up26 = state26mod.upsertAttempt(
+   st26,
+   { id: "a", role: "r", phase: "settled", terminal: "succeeded", finishedAt: 42 },
+   100,
+);
+assert(up26.applied === true && up26.attempt.finishedAt === 42, "新建即结终应带 finishedAt（回执时刻优先）");
+const again26 = state26mod.upsertAttempt(
+   st26,
+   { id: "a", role: "r", phase: "settled", terminal: "failed" },
+   200,
+);
+assert(again26.applied === false && again26.attempt.terminal === "succeeded", "已结终态不被迟到结果改写");
+const own26 = state26mod.upsertAttempt(st26, { id: "b", role: "r", phase: "running", owner: "host" }, 100);
+assert(own26.applied === true, "正常新建 running 不受守卫影响");
+const diff26 = state26mod.upsertAttempt(st26, { id: "b", role: "r", owner: "other" }, 200);
+assert(diff26.applied === false && own26.attempt.owner === "host", "owner 双方已知且不同不覆盖");
+const p26 = path.join(sandbox, "state26.json");
+const out26 = attempts26.recordReceipts(
+   [{ marker: attempts26.RECEIPT_MARKER, role: "r", attempts: [{ id: "x1", role: "r", at: 42, ok: true, kind: "ok" }] }],
+   { path: p26, owner: "host", now: 100 },
+);
+assert(out26.recorded === 1, "回执应记账一次");
+const rs26 = state26mod.readState(p26);
+assert(rs26.attempts[0].finishedAt === 42, "回执结终时刻应写 finishedAt");
+assert(
+   rs26.attempts[0].phase === "settled" && rs26.attempts[0].terminal === "succeeded",
+   "回执应落 settled 终态",
+);
+ok("遗留 ①②：回执 finishedAt 一致 + settled/owner 守卫下沉 upsertAttempt");
 
 rmSync(sandbox, { recursive: true, force: true });
 
