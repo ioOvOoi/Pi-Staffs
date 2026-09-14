@@ -228,6 +228,56 @@ const readCappedText = async (
 };
 
 /**
+ * 字面私网/环回/链路本地目标判定（评审 P2 SSRF 面）。
+ * 为什么只做字面判断：DNS rebinding 要拿到解析结果才可知，在本函数里预解析等于自己实现 DNS，
+ * 超出本批范围；字面地址 + 逐跳复查已兜住主面（私网直连、重定向跨网段）。
+ * PI_STAFFS_ALLOW_PRIVATE_FETCH=1 放行：本机开发经常要抓内网或调试服务。
+ */
+export const isPrivateFetchTarget = (target: URL): boolean => {
+   if (process.env.PI_STAFFS_ALLOW_PRIVATE_FETCH === "1") return false;
+   // URL.hostname 对 IPv6 是带方括号的（如 "[::1]"），先剥掉再判。
+   const hostname = target.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+   if (hostname === "localhost") return true;
+   // IPv4-mapped IPv6 会被 URL 规范成 hex 形式（::ffff:7f00:1），折算回点分十进制再走 IPv4 判定，
+   // 否则 ::ffff:127.0.0.1 这类能绕过纯字面检查。
+   let ipv4 = hostname;
+   const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(hostname);
+   if (mapped) {
+      const hi = parseInt(mapped[1], 16);
+      const lo = parseInt(mapped[2], 16);
+      ipv4 = [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join(".");
+   }
+   const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ipv4);
+   if (match) {
+      const [a, b, c, d] = match.slice(1).map(Number);
+      if (a > 255 || b > 255 || c > 255 || d > 255) return false; // 非法八位组交回给 fetch 自己报错
+      return (
+         a === 10 ||
+         (a === 172 && b >= 16 && b <= 31) ||
+         (a === 192 && b === 168) ||
+         a === 127 ||
+         (a === 169 && b === 254)
+      );
+   }
+   if (!hostname.includes(":")) return false; // 非 IP 的主机名不做预判（DNS rebinding 超出本批范围）
+   if (hostname === "::1") return true;
+   // fc00::/7（前 7 位 1111110 → 首组 fc/fd）；fe80::/10（前 10 位 → fe80..febf）。
+   return /^f[cd]/.test(hostname) || /^fe[89ab]/.test(hostname);
+};
+
+/** 初始 URL 与每一跳重定向共用的白名单闸门：协议 + 私网字面。 */
+const assertPublicFetchTarget = (target: URL): void => {
+   if (target.protocol !== "http:" && target.protocol !== "https:")
+      throw new Error("staffs_webfetch 只支持 http/https：" + target.protocol);
+   if (isPrivateFetchTarget(target))
+      throw new Error(
+         "staffs_webfetch 拒绝私网/环回目标（SSRF 防护）：" +
+            target.hostname +
+            "，本机开发可设 PI_STAFFS_ALLOW_PRIVATE_FETCH=1 放行",
+      );
+};
+
+/**
  * 外部进程统一入口：带超时、带上限、不继承 stdin（否则外部 CLI 会抢走宿主输入）。
  * 不用 execFileSync：这类命令动辄几分钟，同步会卡住整个扩展宿主。
  */
@@ -396,6 +446,15 @@ export const registerStaffsTools = (
          attemptId: Type.Optional(Type.String()),
       }),
       async execute(_id, params) {
+         // 只读 op（list/ready）直读盘、不落盘：原先也走 mutate，等于每次查询白写一次盘（评审 P2）。
+         if (params.op === "list" || params.op === "ready") {
+            const state = readState(currentStatePath());
+            const value =
+               params.op === "ready" ? readyTasks(state) : state.tasks;
+            return reply(JSON.stringify(value, null, 2), {
+               count: Array.isArray(value) ? value.length : 1,
+            });
+         }
          const { value } = mutate(path, (state, now) => {
             if (params.op === "add") {
                if (!params.title) throw new Error("staffs_task add 需要 title");
@@ -428,8 +487,8 @@ export const registerStaffsTools = (
                   now,
                );
             }
-            if (params.op === "ready") return readyTasks(state);
-            return state.tasks;
+            // 走到这里只可能是不在联合类型里的 op（read op 已在上方直读分支）——防御性报错，宁可失败不静默写盘。
+            throw new Error("staffs_task 未知 op：" + String(params.op));
          });
          return reply(JSON.stringify(value, null, 2), {
             count: Array.isArray(value) ? value.length : 1,
@@ -535,19 +594,18 @@ export const registerStaffsTools = (
                writeState(latest, currentStatePath());
             }
             // 回执按实际写入数报，跳过的已存在票单独注明，避免虚报导入数。
-            const importedMsg = !added.length
-               ? "（已是最新，无需导入）"
-               : fresh.length
-                 ? "已导入：" +
-                   fresh.map((task) => task.id).join(", ") +
-                   (added.length > fresh.length
-                      ? "（跳过 " + (added.length - fresh.length) + " 张已存在票）"
-                      : "")
-                 : "全部 " + added.length + " 张均已存在，跳过";
-            return reply(
-               importedMsg,
-               { added: added.length },
-            );
+            const importedMsg = added.length
+               ? fresh.length
+                  ? "已导入：" +
+                    fresh.map((task) => task.id).join(", ") +
+                    (added.length > fresh.length
+                       ? "（跳过 " +
+                         (added.length - fresh.length) +
+                         " 张已存在票）"
+                       : "")
+                  : "全部 " + added.length + " 张均已存在，跳过"
+               : "（已是最新，无需导入）";
+            return reply(importedMsg, { added: added.length });
          }
          if (!params.id) throw new Error("staffs_ticket close 需要 id");
          await adapter.writeState(
@@ -635,15 +693,43 @@ export const registerStaffsTools = (
                   params.url.slice(0, 120),
             );
          }
-         if (target.protocol !== "http:" && target.protocol !== "https:")
-            throw new Error(
-               "staffs_webfetch 只支持 http/https：" + target.protocol,
-            );
+         // 协议 + 私网字面检查（评审 P2 SSRF）：初始目标与每一跳重定向都要过这道闸。
+         assertPublicFetchTarget(target);
          // 调用方的 signal 只覆盖用户取消；服务端挂着不回时会一直等，所以再叠一个硬超时。
          const deadline = AbortSignal.timeout(30_000);
-         const response = await fetch(target, {
-            signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
-         });
+         const fetchOnce = (url: URL): Promise<Response> =>
+            fetch(url, {
+               // redirect: manual：重定向逐跳人工复查 Location，默认 follow 会静默跟着跳进私网。
+               redirect: "manual",
+               signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+            });
+         let response = await fetchOnce(target);
+         for (
+            let hop = 0;
+            response.status >= 300 && response.status < 400;
+            hop++
+         ) {
+            if (hop >= 5)
+               throw new Error("staffs_webfetch 重定向超过 5 跳，已停止跟随");
+            const location = response.headers.get("location");
+            if (!location)
+               throw new Error(
+                  "staffs_webfetch 收到 " +
+                     response.status +
+                     " 重定向但没有 Location 头",
+               );
+            let next: URL;
+            try {
+               next = new URL(location, target);
+            } catch {
+               throw new Error(
+                  "staffs_webfetch 重定向目标非法：" + location.slice(0, 120),
+               );
+            }
+            assertPublicFetchTarget(next);
+            target = next;
+            response = await fetchOnce(target);
+         }
          // 先按字节封顶再解码：超出上限的部分没必要读（旧实现是 response.text() 全读）。
          const raw = await readCappedText(
             response,
@@ -679,6 +765,7 @@ export const registerStaffsTools = (
             Type.Literal("remove"),
          ]),
          name: Type.Optional(Type.String()),
+         force: Type.Optional(Type.Boolean()),
       }),
       async execute(_id, params) {
          if (params.op === "list") {
@@ -688,7 +775,20 @@ export const registerStaffsTools = (
          if (!params.name) throw new Error("staffs_worktree 需要 name");
          const { directory, branch } = worktreeTarget(cwd, params.name);
          if (params.op === "remove") {
-            await git(cwd, ["worktree", "remove", directory, "--force"]);
+            if (params.force === true) {
+               await git(cwd, ["worktree", "remove", directory, "--force"]);
+            } else {
+               // 脏检查必须进 worktree 目录本身跑：主仓库的 git status 看不到子 worktree 的改动（评审 P2）。
+               const status = await git(directory, ["status", "--porcelain"]);
+               if (status)
+                  throw new Error(
+                     "worktree " +
+                        directory +
+                        " 有未提交改动（git status 非空），拒绝移除以保护现场。如确认丢弃，请传 force: true。",
+                  );
+               // 只在显式 force 时才带 --force：干净 worktree 移除不需要它，恒 --force 会把脏改动直接埋掉。
+               await git(cwd, ["worktree", "remove", directory]);
+            }
             return reply("已移除 worktree " + directory);
          }
          mkdirSync(dirname(directory), { recursive: true });
@@ -979,6 +1079,24 @@ export type InterviewDoc = {
    items: Array<{ question: string; answer: string }>;
 };
 
+/** 答案桶（评审 P2 往返格式）：行首 "## " 会打断 Q&A 的 /^## /m 切分、行首 "---" 或首尾空白会被
+ *  parser 的 trim 吃掉——只要会变形就整体 base64 编码，保证任意答案文本无损往返。
+ *  为什么带标记而非整稿编码：老稿没有标记时按原文读回，已落盘的面试稿无需重写。 */
+const ANSWER_B64_PREFIX = "<pi-staffs-b64>";
+
+const encodeAnswer = (answer: string): string =>
+   /(^|\n)(## |---)/.test(answer) || answer !== answer.trim()
+      ? ANSWER_B64_PREFIX + Buffer.from(answer, "utf8").toString("base64")
+      : answer;
+
+const decodeAnswer = (answer: string): string =>
+   answer.startsWith(ANSWER_B64_PREFIX)
+      ? // base64 解码对非法字符宽容，标记是内部自产，读到乱码只可能是伪造，不另做校验。
+        Buffer.from(answer.slice(ANSWER_B64_PREFIX.length), "base64").toString(
+           "utf8",
+        )
+      : answer;
+
 export const formatInterview = (doc: InterviewDoc): string => {
    const lines = [
       "---",
@@ -990,7 +1108,7 @@ export const formatInterview = (doc: InterviewDoc): string => {
       "",
    ];
    for (const item of doc.items)
-      lines.push("## " + item.question, "", item.answer, "");
+      lines.push("## " + item.question, "", encodeAnswer(item.answer), "");
    return lines.join("\n");
 };
 
@@ -1009,7 +1127,9 @@ export const parseInterview = (markdown: string): InterviewDoc | undefined => {
    for (const chunk of markdown.slice(head[0].length).split(/^## /m).slice(1)) {
       const breakAt = chunk.indexOf("\n");
       const question = (breakAt < 0 ? chunk : chunk.slice(0, breakAt)).trim();
-      const answer = (breakAt < 0 ? "" : chunk.slice(breakAt + 1)).trim();
+      const answer = decodeAnswer(
+         (breakAt < 0 ? "" : chunk.slice(breakAt + 1)).trim(),
+      );
       if (question) items.push({ question, answer });
    }
    return {

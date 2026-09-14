@@ -17,6 +17,7 @@ import {
    openSync,
    readFileSync,
    renameSync,
+   unlinkSync,
    writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -178,16 +179,32 @@ export const writeState = (
    try {
       writeSync(descriptor, `${JSON.stringify(state, null, 2)}\n`);
       fsyncSync(descriptor);
+      renameSync(temporary, path);
+   } catch (cause) {
+      // 半成品 tmp 不清会无限堆积（评审疑点 7，实锤）；rename 成功后 unlink 必然失败，吞掉即可。
+      try {
+         unlinkSync(temporary);
+      } catch {
+         /* 已 rename 或磁盘异常，放弃清理 */
+      }
+      throw cause;
    } finally {
       closeSync(descriptor);
    }
-   renameSync(temporary, path);
    return path;
 };
 
-/** 递增 id：不用随机数是为了日志可比对、测试可断言。 */
-const nextId = (prefix: string, count: number): string =>
-   `${prefix}-${String(count + 1).padStart(3, "0")}`;
+/** 递增 id：不用随机数是为了日志可比对、测试可断言。
+ *  为什么看现有 id 而不是 length：条目可被外部增删或手工编辑，按 length 计数会撞号（评审 P1-8）。 */
+const nextId = (prefix: string, entries: { id: string }[]): string => {
+   let max = 0;
+   for (const entry of entries) {
+      if (!entry.id.startsWith(prefix + "-")) continue;
+      const at = Number.parseInt(entry.id.slice(prefix.length + 1), 10);
+      if (Number.isFinite(at) && at > max) max = at;
+   }
+   return `${prefix}-${String(max + 1).padStart(3, "0")}`;
+};
 
 export const upsertAttempt = (
    state: StaffsState,
@@ -209,7 +226,7 @@ export const upsertAttempt = (
       return existing;
    }
    const attempt: Attempt = {
-      id: input.id ?? nextId("attempt", state.attempts.length),
+      id: input.id ?? nextId("attempt", state.attempts),
       role: input.role,
       model: input.model ?? "",
       phase: input.phase ?? "running",
@@ -287,7 +304,7 @@ export const addTask = (
    now: number = Date.now(),
 ): TeamTask => {
    const task: TeamTask = {
-      id: input.id ?? nextId("task", state.tasks.length),
+      id: input.id ?? nextId("task", state.tasks),
       title: input.title,
       role: input.role,
       deps: input.deps ?? [],
@@ -361,7 +378,7 @@ export const sendMail = (
    now: number = Date.now(),
 ): MailMessage => {
    const message: MailMessage = {
-      id: nextId("mail", state.mailbox.length),
+      id: nextId("mail", state.mailbox),
       from: input.from,
       to: input.to,
       text: input.text,

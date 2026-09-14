@@ -93,38 +93,3 @@ export const checkRolePermissions = (
    }
    return { role: name, allowed: true, denied, needsAsk };
 };
-
-/**
- * 派发请求里显式点名工具时用它二次判定（角色 tools 之外的越权请求）。
- * 为什么留着 allow：有些角色 tools 是 `*`，此时 allow 表是唯一能表达「只准这些」的手段。
- */
-export const checkRequestedTool = (
-   name: string,
-   role: RoleRoute,
-   tool: string,
-): PermissionVerdict => {
-   const verdict = checkRolePermissions(name, role);
-   const permissions = readPermissions(role);
-   if (covers(permissions.deny, tool)) {
-      return {
-         ...verdict,
-         allowed: false,
-         denied: [tool],
-         reason: `角色 ${name} 被禁止使用工具 ${tool}`,
-      };
-   }
-   const declared = Array.isArray(role.tools) ? role.tools : [];
-   const withinRole =
-      declared.includes(tool) ||
-      declared.includes("*") ||
-      covers(permissions.allow, tool);
-   if (!withinRole) {
-      return {
-         ...verdict,
-         allowed: false,
-         denied: [tool],
-         reason: `工具 ${tool} 不在角色 ${name} 的 tools 白名单里`,
-      };
-   }
-   return verdict;
-};

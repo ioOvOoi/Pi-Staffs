@@ -209,7 +209,21 @@ const staffs = {
       if (!found) throw new Error("Unknown Pi-Staffs role: " + String(role) + "（可用：" + Object.keys(__staffsRoles).join(", ") + "）");
       return { name: role, ...found, model: __staffsModels[role] || found.model };
    },
-   preflight: (roles) => __staffsPreflight(__staffsHost(), __staffsModels, roles),
+   preflight: (roles) => {
+      // 未知角色静默 ok:true 是坑（P2）：先验名再预检；空/无参保持「全量预检」语义。
+      const wanted = Array.isArray(roles) ? roles : typeof roles === "string" ? [roles] : [];
+      const unknown = wanted.filter(
+         (name) =>
+            typeof name === "string" &&
+            !Object.prototype.hasOwnProperty.call(__staffsRoles, name),
+      );
+      if (unknown.length)
+         throw new Error(
+            "Unknown Pi-Staffs role: " + unknown[0] +
+               "（可用：" + Object.keys(__staffsRoles).join(", ") + "）",
+         );
+      return __staffsPreflight(__staffsHost(), __staffsModels, roles);
+   },
    preflightCouncil: () => {
       const map = {};
       (__staffsCouncilConfig.models || []).forEach((ref, index) => {
@@ -230,6 +244,12 @@ const staffs = {
       const models = (Array.isArray(rest.models) && rest.models.length ? rest.models : configured)
          .map((name) => __staffsModels[name] || name)
          .filter((name, index, all) => typeof name === "string" && name.trim() && all.indexOf(name) === index);
+      // 与 run/spawn 纪律对称（P1-7）：thinking/tools/timeoutMs 是宿主权威参数，caller
+      // 不得借 council 注入绕过角色矩阵；synth 本就传 {}，判断型成员不该带工具。
+      const memberRequest = { ...rest };
+      delete memberRequest.tools;
+      delete memberRequest.thinking;
+      delete memberRequest.timeoutMs;
       return __staffsCouncil({
          host: __staffsHost(),
          models,
@@ -237,7 +257,7 @@ const staffs = {
          synthInstructions: rest.instructions || __staffsCouncilConfig.synthInstructions,
          budgetTokens: rest.budgetTokens || __staffsCouncilConfig.budgetTokens,
          task: __staffsCombine(undefined, task),
-         request: rest,
+         request: memberRequest,
          policy: __staffsPolicyConfig,
       });
    },

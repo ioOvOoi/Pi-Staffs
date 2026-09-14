@@ -77,8 +77,8 @@ export const parseFindings = (text: string): ReviewFinding[] => {
 
 /** 指纹：同一处问题被不同措辞重复报告时也只修一次。 */
 export const findingKey = (finding: ReviewFinding): string =>
+   // severity 不进指纹：同一处问题换了严重级仍是同一处，不该重修（评审疑点 3，实锤）。
    [
-      finding.severity,
       finding.file ?? "-",
       finding.line ?? "-",
       finding.message.toLowerCase().replace(/\s+/g, " "),
@@ -152,13 +152,22 @@ export type ReviewBriefInput = {
    maxChars?: number;
 };
 
+/** 截断回退一个码元：切点恰好卡在 UTF-16 代理对中间会产生乱码（评审 P2）。 */
+const safeSlice = (text: string, maxChars: number): string => {
+   const hi = text.charCodeAt(maxChars - 1) || 0;
+   const lo = text.charCodeAt(maxChars) || 0;
+   return hi >= 0xd800 && hi <= 0xdbff && lo >= 0xdc00 && lo <= 0xdfff
+      ? text.slice(0, maxChars - 1)
+      : text.slice(0, maxChars);
+};
+
 /** 给审阅者的 brief：只有任务、验收标准、diff —— 干净上下文是刻意的（不附实现者的自辩）。 */
 export const buildReviewBrief = (input: ReviewBriefInput): string => {
    const maxChars = input.maxChars ?? 60000;
    const diff = String(input.diff ?? "");
    const clipped =
       diff.length > maxChars
-         ? diff.slice(0, maxChars) +
+         ? safeSlice(diff, maxChars) +
            `\n（diff 已截断，原长 ${diff.length} 字符）`
          : diff;
    return [
@@ -176,9 +185,10 @@ export const buildReviewBrief = (input: ReviewBriefInput): string => {
          : []),
       "",
       "## diff" + (input.base ? `（相对 ${input.base}）` : ""),
-      "```diff",
+      // 四反引号围栏：diff 里出现 ``` 时三反引号会提前断栏（评审疑点 1，部分真）。
+      "````diff",
       clipped,
-      "```",
+      "````",
       "",
       FINDINGS_FORMAT,
    ].join("\n");

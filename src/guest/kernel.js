@@ -313,8 +313,16 @@ function __staffsText(result) {
    return "";
 }
 
-/** 抠出 token 用量（有就记账，没有就 0——不猜）。
- * @param {any} result @returns {{ in: number; out: number; total: number }} */
+/** 抠出 token 用量（有就记账，没有就 0——不猜）：把 extra 的数值字段累进 base。
+ * @param {any} base @param {any} extra @returns {Record<string, number>} */
+function __staffsMergeUsage(base, extra) {
+   const out = { ...base };
+   for (const [key, value] of Object.entries(extra || {}))
+      if (typeof value === "number") out[key] = (out[key] || 0) + value;
+   return out;
+}
+
+/** @param {any} result @returns {Record<string, number> | undefined} */
 function __staffsUsage(result) {
    const usage =
       result && typeof result === "object"
@@ -431,7 +439,8 @@ async function __staffsCouncil(deps) {
          error: synth.error || "",
          usage: __staffsUsage(synth.result),
       },
-      usage: totals,
+      // usage 必须含 synth 段，否则预算/看板统计少算合成回合（评审疑点 4，实锤）。
+      usage: __staffsMergeUsage(totals, __staffsUsage(synth.result)),
    };
 }
 

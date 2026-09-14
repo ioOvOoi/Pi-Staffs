@@ -55,7 +55,8 @@ export const parseFrontmatter = (
 ): { data: Record<string, string | string[]>; body: string } => {
    const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
    if (!match) return { data: {}, body: text };
-   const data: Record<string, string | string[]> = {};
+   // 用无原型对象装解析结果：票内容不可信，普通对象会被 __proto__ 之类的键改掉原型链（原型污染，评审 P2）。
+   const data = Object.create(null) as Record<string, string | string[]>;
    for (const line of match[1].split(/\r?\n/)) {
       const pair = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.trim());
       if (!pair) continue;

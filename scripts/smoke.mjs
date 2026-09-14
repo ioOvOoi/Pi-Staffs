@@ -33,6 +33,8 @@ writeFileSync(
 process.env.PI_STAFFS_CONFIG = configPath;
 process.env.PI_STAFFS_FABRIC_CONFIG = fabricPath;
 delete process.env.PI_FABRIC_PARENT_RUN;
+// 17b/24 节的本地私网 server 是被测对象，默认拒私网会误伤，smoke 内显式放行。
+process.env.PI_STAFFS_ALLOW_PRIVATE_FETCH = "1";
 
 const load = (relative) =>
    import(pathToFileURL(path.join(repo, relative)).href);
@@ -1357,6 +1359,136 @@ assert(
    "写新文件后留证件必须还在（不能把证据抹掉）",
 );
 ok("坏状态文件：readState 留证改名并回空态，writeState 正常落新文件");
+
+// ---------- 23. 评审第三批：稳定指纹 / frontmatter 防原型污染 / 技能同步清理 ----------
+const hooks23 = await load("src/hooks.ts");
+const tracker23 = await load("src/tracker.ts");
+const skills23 = await load("src/skills.ts");
+assert(
+   hooks23.stableKey({ a: { x: 1, y: 2 } }) ===
+      hooks23.stableKey({ a: { y: 2, x: 1 } }),
+   "嵌套键序不同应同指纹",
+);
+assert(
+   hooks23.stableKey({ a: [1, 2] }) !== hooks23.stableKey({ a: [2, 1] }),
+   "数组顺序应保留",
+);
+const circ23 = {};
+circ23.self = circ23;
+assert(
+   hooks23.stableKey(circ23) === "[unserializable]",
+   "循环引用应降级为不可比指纹",
+);
+const fm23 = tracker23.parseFrontmatter(
+   "---\n__proto__: [x]\ntitle: t\n---\nbody",
+);
+assert(
+   Object.getPrototypeOf(fm23.data) === null,
+   "frontmatter 解析结果应无原型",
+);
+assert(
+   fm23.data.title === "t" && Array.isArray(fm23.data["__proto__"]),
+   "__proto__ 应成为自有属性且正常字段可读",
+);
+const syncClean23 = mkdtempSync(path.join(tmpdir(), "pi-staffs-clean-"));
+mkdirSync(path.join(syncClean23, "user-own"), { recursive: true });
+writeFileSync(
+   path.join(syncClean23, "user-own", "SKILL.md"),
+   "name: user-own\ndescription: x\n",
+);
+mkdirSync(path.join(syncClean23, "ghost-skill"), { recursive: true });
+writeFileSync(
+   path.join(syncClean23, ".pi-staffs-manifest.json"),
+   JSON.stringify(["ghost-skill"]),
+);
+const clean23 = skills23.syncStaffsSkills(syncClean23);
+assert(clean23.removed.join(",") === "ghost-skill", "清单里的已删技能应清掉");
+assert(
+   !existsSync(path.join(syncClean23, "ghost-skill")),
+   "被清目录应真实移除",
+);
+assert(
+   existsSync(path.join(syncClean23, "user-own", "SKILL.md")),
+   "清单外目录不应误删",
+);
+rmSync(syncClean23, { recursive: true, force: true });
+ok(
+   "评审第三批：深度稳定指纹 / frontmatter 防原型污染 / 技能同步只清自己写过的",
+);
+
+// ---------- 24. 评审第三批·车道 C：私网 fetch 闸门 / interview 无损往返 ----------
+const tools24 = await load("src/tools.ts");
+const isPrivate = tools24.isPrivateFetchTarget;
+const savedAllow24 = process.env.PI_STAFFS_ALLOW_PRIVATE_FETCH;
+delete process.env.PI_STAFFS_ALLOW_PRIVATE_FETCH; // 矩阵要测默认拒，先摘掉顶层放行
+const privTargets24 = [
+   "http://localhost:1/",
+   "http://127.0.0.1/",
+   "http://10.1.2.3/",
+   "http://172.16.0.1/",
+   "http://192.168.1.1/",
+   "http://169.254.1.1/",
+   "http://[::1]/",
+   "http://[::ffff:127.0.0.1]/",
+   "http://[::ffff:7f00:1]/",
+   "http://[fc00::1]/",
+   "http://[fd12:3456::1]/",
+   "http://[fe80::1]/",
+];
+for (const u of privTargets24)
+   assert(isPrivate(new URL(u)) === true, "私网应判定为私：" + u);
+assert(
+   isPrivate(new URL("https://example.com/")) === false,
+   "公网域名不应误判",
+);
+process.env.PI_STAFFS_ALLOW_PRIVATE_FETCH = "1";
+assert(isPrivate(new URL("http://127.0.0.1/")) === false, "env 放行后不再拒");
+if (savedAllow24 === undefined)
+   delete process.env.PI_STAFFS_ALLOW_PRIVATE_FETCH;
+else process.env.PI_STAFFS_ALLOW_PRIVATE_FETCH = savedAllow24;
+const doc24 = {
+   topic: "往返格式",
+   createdAt: new Date().toISOString(),
+   status: "complete",
+   items: [
+      { question: "Q1", answer: "## 看起来像标题\n---\n  前后空白  " },
+      { question: "Q2", answer: "普通答案" },
+   ],
+};
+const md24 = tools24.formatInterview(doc24);
+const back24 = tools24.parseInterview(md24);
+assert(back24 !== undefined, "格式化稿应可解析回");
+assert(
+   back24.items[0].answer === doc24.items[0].answer,
+   "含 ## 与 --- 的答案应无损往返",
+);
+assert(back24.items[1].answer === "普通答案", "普通答案不编码原样往返");
+ok("评审第三批·车道 C：私网 fetch 闸门矩阵 + interview 无损往返");
+
+// ---------- 25. 评审第三批·车道 A：回执提取加固（P1-6）+ 记账守卫（P1-8） ----------
+const attempts25 = await load("src/attempts.ts");
+const state25mod = await load("src/state.ts");
+const extract25 = attempts25.extractReceipts;
+const pretty25 = (fields = {}) =>
+   JSON.stringify({ marker: attempts25.RECEIPT_MARKER, attempts: [{ id: "a1", ok: true }], ...fields }, null, 2) + "\n";
+assert(extract25(pretty25()).length === 1, "行首 marker 真回执可认");
+assert(extract25(pretty25().replace(attempts25.RECEIPT_MARKER, "evil/v9")).length === 0, "伪造 marker 丢弃");
+assert(extract25("前文 " + attempts25.RECEIPT_MARKER + " 中段\n" + pretty25()).length === 1, "文本中段 marker 不误配");
+assert(extract25('{"marker":"' + attempts25.RECEIPT_MARKER + '","attempts":[]}').length === 0, "内联 JSON 忽略");
+assert(extract25('err: "brace { x",\n' + pretty25()).length === 1, "花括号错误文本不吞真回执");
+const t25 = extract25(
+   JSON.stringify({ marker: attempts25.RECEIPT_MARKER, evil: 1, attempts: [{ id: "a", evil: "x" }] }, null, 2),
+);
+assert(t25.length === 1 && !("evil" in t25[0]) && !("evil" in t25[0].attempts[0]), "白名单剔除多余字段");
+const rec25 = (owner, id) =>
+   [{ marker: attempts25.RECEIPT_MARKER, role: "r", attempts: [{ id, role: "r", at: 7, ok: true, kind: "ok" }] }];
+const p25 = path.join(sandbox, "state25.json");
+const first25 = attempts25.recordReceipts(rec25("host", "x"), { path: p25, owner: "host", now: 1 });
+const second25 = attempts25.recordReceipts(rec25("host", "x"), { path: p25, owner: "host", now: 2 });
+assert(first25.recorded === 1 && second25.recorded === 0, "settled 重放不再覆盖/重复记账");
+assert(attempts25.recordReceipts(rec25("other", "x"), { path: p25, owner: "other", now: 3 }).recorded === 0, "owner 不同不覆盖");
+assert(state25mod.readState(p25).attempts[0].owner === "host", "旧 attempt 记录未被污染");
+ok("评审第三批·车道 A：回执提取加固 + 记账守卫");
 
 rmSync(sandbox, { recursive: true, force: true });
 

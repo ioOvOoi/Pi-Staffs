@@ -106,18 +106,65 @@ export const buildTurnInjection = (
       .filter((part) => part && part.trim())
       .join("\n\n");
 
-/** 工具调用的稳定指纹：键排序，避免同一输入因为键序不同被判成不同调用。 */
+/**
+ * 工具调用的稳定指纹：递归键排序后序列化，避免同一输入因为键序不同被判成不同调用。
+ * 旧实现只排顶层键，嵌套对象键序不同会漏判（评审 P2），这里换成整棵树稳定序列化。
+ * slice(0,200) 与顶层切片沿用旧语义：指纹只用于相等比较，截断不改变相等性。
+ */
 export const stableKey = (input: unknown): string => {
    if (input === undefined || input === null) return "";
    if (typeof input !== "object") return String(input).slice(0, 200);
-   const source = input as Record<string, unknown>;
-   const ordered: Record<string, unknown> = {};
-   for (const key of Object.keys(source).sort()) ordered[key] = source[key];
    try {
-      return JSON.stringify(ordered).slice(0, 200);
+      return deepStableStringify(input).slice(0, 200);
    } catch {
       return "[unserializable]";
    }
+};
+
+/**
+ * 递归稳定序列化：对象键排序后输出、数组保序，语义对齐 JSON.stringify
+ * （对象里 undefined/函数/符号键省略、数组里转 null、NaN/Infinity 转 null）。
+ * 循环引用直接抛错（BigInt 同理），由 stableKey 兜底成不可比指纹。
+ */
+export const deepStableStringify = (value: unknown): string => {
+   const seen = new Set<object>();
+   const OMIT = Symbol("omit");
+   const visit = (node: unknown): string | typeof OMIT => {
+      if (node === null) return "null";
+      if (typeof node === "string") return JSON.stringify(node);
+      if (typeof node === "number")
+         return Number.isFinite(node) ? String(node) : "null";
+      if (typeof node === "boolean") return String(node);
+      if (typeof node === "bigint") throw new Error("bigint 无法序列化");
+      // undefined/function/symbol：JSON 语义里对象上下文省略该键、数组上下文是 null，
+      // 用 OMIT 标记让外层自己抉择。
+      if (typeof node !== "object") return OMIT;
+      if (node instanceof Date) return JSON.stringify(node.toISOString());
+      if (seen.has(node)) throw new Error("循环引用");
+      seen.add(node);
+      let out: string;
+      if (Array.isArray(node)) {
+         out =
+            "[" +
+            node
+               .map(visit)
+               .map((item) => (item === OMIT ? "null" : item))
+               .join(",") +
+            "]";
+      } else {
+         const pairs: string[] = [];
+         for (const key of Object.keys(node).sort()) {
+            const child = visit((node as Record<string, unknown>)[key]);
+            if (child === OMIT) continue;
+            pairs.push(JSON.stringify(key) + ":" + child);
+         }
+         out = "{" + pairs.join(",") + "}";
+      }
+      seen.delete(node);
+      return out;
+   };
+   const result = visit(value);
+   return result === OMIT ? "null" : result;
 };
 
 /** tool-loop-guard：连续 N 次完全相同的调用，通常是模型在打转（omo-slim 的同名钩子）。 */
