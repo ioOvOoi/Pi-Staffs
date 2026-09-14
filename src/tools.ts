@@ -534,10 +534,18 @@ export const registerStaffsTools = (
                latest.updatedAt = Date.now();
                writeState(latest, currentStatePath());
             }
+            // 回执按实际写入数报，跳过的已存在票单独注明，避免虚报导入数。
+            const importedMsg = !added.length
+               ? "（已是最新，无需导入）"
+               : fresh.length
+                 ? "已导入：" +
+                   fresh.map((task) => task.id).join(", ") +
+                   (added.length > fresh.length
+                      ? "（跳过 " + (added.length - fresh.length) + " 张已存在票）"
+                      : "")
+                 : "全部 " + added.length + " 张均已存在，跳过";
             return reply(
-               added.length
-                  ? "已导入：" + added.map((task) => task.id).join(", ")
-                  : "（已是最新，无需导入）",
+               importedMsg,
                { added: added.length },
             );
          }
