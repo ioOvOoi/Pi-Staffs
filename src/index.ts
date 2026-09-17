@@ -22,7 +22,7 @@ import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
 import { formatDoctorReport, registerStaffsTools } from "./tools.ts";
 import { listStaffsSkills, syncStaffsSkills } from "./skills.ts";
 import { openPresetSwitcher, openRolesPanel, type RolesPanelIO } from "./roles-panel.ts";
-import type { SelectItem } from "@earendil-works/pi-tui";
+import type { AutocompleteItem, SelectItem } from "@earendil-works/pi-tui";
 import {
    footerSummary,
    formatBoard,
@@ -31,7 +31,7 @@ import {
    type StaffsState,
 } from "./state.ts";
 
-export const PI_STAFFS_VERSION = "1.2.0";
+export const PI_STAFFS_VERSION = "1.3.0";
 
 /**
  * 派发指引（写进 system prompt）。为什么必须显式写：子 agent 只看到父会话传来的 task，
@@ -177,7 +177,13 @@ export default function piStaffs(pi: ExtensionAPI): void {
 
    pi.registerCommand("staffs", {
       description: "Pi-Staffs：角色矩阵与模型档位（preset）",
-      handler: async (args, ctx) => {
+      // 参数补全：宿主对返回值原样显示，过滤逻辑在纯函数里自己完成。
+      // 档位名实时读配置缓存（snapshot）：preset 面板写盘后立刻可补出新档位。
+      getArgumentCompletions: (prefix) =>
+         buildStaffsArgumentCompletions(
+            prefix,
+            Object.keys(snapshot().config.presets ?? {}),
+         ),      handler: async (args, ctx) => {
          const requested = String(args ?? "").trim();
          const outcome = loadStaffsConfig();
          cache = { config: outcome.config, path: outcome.path };
@@ -342,3 +348,57 @@ export default function piStaffs(pi: ExtensionAPI): void {
       },
    });
 }
+
+/**
+ * /staffs 参数补全（注册给 registerCommand.getArgumentCompletions）。
+ * 为什么独立成纯函数：宿主对返回值原样显示、不做过滤，这里必须自己按当前输入过滤；
+ * 拆出来 + presetNames 注入，冒烟可以直接断言逻辑、不用起 Pi。
+ * 语义：第一段补子命令（子序列模糊）；敲到第二段改补该子命令的参数
+ * （preset → 档位名、panel → footer/widget/off、skills → sync），无参数子命令给空。
+ * 为什么按空格分词：命令参数来自输入框，子命令与参数以空格分隔；split 保留尾部
+ * 空段，正好区分 preset 与 preset 加空格（后者已进入参数输入）。
+ */
+export function buildStaffsArgumentCompletions(
+   argumentPrefix: string,
+   presetNames: string[],
+): AutocompleteItem[] {
+   const SUBCOMMANDS: AutocompleteItem[] = [
+      { value: 'preset', label: 'preset', description: '切换模型档位（TUI 交互选）' },
+      { value: 'roles', label: 'roles', description: '逐角色调模型与思考档（交互面板）' },
+      { value: 'skills', label: 'skills', description: '技能清单；sync 同步到全局' },
+      { value: 'panel', label: 'panel', description: '观测层：footer / widget / off' },
+      { value: 'board', label: 'board', description: '看板：进行中的派发与任务' },
+      { value: 'doctor', label: 'doctor', description: '配置体检报告' },
+   ];
+   const ARGUMENTS: Record<string, AutocompleteItem[]> = {
+      preset: presetNames.map((name) => ({ value: name, label: name, description: '模型档位' })),
+      panel: [
+         { value: 'footer', label: 'footer', description: 'footer 一行数字' },
+         { value: 'widget', label: 'widget', description: '常驻面板' },
+         { value: 'off', label: 'off', description: '关闭观测层' },
+      ],
+      skills: [{ value: 'sync', label: 'sync', description: '同步技能到全局目录' }],
+   };
+   // 输入形如 preset oll：第一段=子命令，第二段=参数（可能仍在输入中）。
+   const parts = argumentPrefix.split(' ');
+   const sub = parts[0] ?? '';
+   const inArgument = parts.length > 1 || argumentPrefix.trimStart().length > sub.length;
+   const query = inArgument ? (parts[parts.length - 1] ?? '') : sub;
+   const candidates = inArgument ? (ARGUMENTS[sub] ?? []) : SUBCOMMANDS;
+   return candidates.filter(
+      (item) => fuzzyInOrder(query, item.value) || fuzzyInOrder(query, item.label),
+   );
+}
+
+/** 子序列模糊匹配（与宿主内置补全同语义）：'prs' 能命中 'preset'。 */
+const fuzzyInOrder = (query: string, text: string): boolean => {
+   if (!query) return true;
+   const q = query.toLowerCase();
+   const t = text.toLowerCase();
+   let idx = 0;
+   for (const ch of t) {
+      if (ch === q[idx] && ++idx === q.length) return true;
+   }
+   return false;
+};
+

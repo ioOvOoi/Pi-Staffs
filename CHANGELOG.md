@@ -1,6 +1,26 @@
 # Changelog
 
-## 1.1.1
+## 1.3.0
+
+`/staffs` 参数补全：敲子命令与档位名时有候选项，不再只提示命令本身。
+
+- index.ts：为 /staffs 注册 getArgumentCompletions；buildStaffsArgumentCompletions 纯函数
+  第一段补子命令（preset/roles/skills/panel/board/doctor），第二段按子命令补参数
+  （preset→档位名、panel→footer/widget/off、skills→sync）；宿主对返回值原样显示、
+  不做过滤，故内部自行做子序列模糊过滤（与宿主内置补全同语义）。
+- 档位名实时读配置缓存：preset 面板写盘后立刻有新建档位入补全。
+- 补上 1.2.0 缺失的 changelog 条目。
+
+## 1.2.0
+
+`/staffs roles` 交互面板：逐角色调模型与思考档（官方 TUI 组件），所见即所得写回。
+
+- roles-panel.ts：Container/SelectList/TextEditor/DynamicBorder 逐角色改 model/thinking；
+  写回语义=有档位改覆盖、无档位改基线，clear 分别为清覆盖/恢复出厂默认；ctx 能力经 IO
+  注入，面板逻辑不依赖宿主。
+- index.ts：/staffs roles 分支（模型候选优先 ctx.scopedModels，为空才全量枚举，
+  按 provider+id 去重）。
+- README 子命令表同步；冒烟探针 11 项全过。
 
 安全加固（评审第一批）：模型可控输入一律锁回项目边界。
 

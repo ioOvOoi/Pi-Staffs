@@ -447,6 +447,25 @@ const emptyPresets = rolesPanelMod.applyPresetChange(
 assert("error" in emptyPresets, "presets 为空的配置应拒绝切换");
 ok("applyPresetChange：切档位写 preset 字段、拒不存在档位与空档位表");
 
+// ---------- 5c. /staffs 参数补全：子命令 → 二级参数（纯函数，不碰 TUI） ----------
+const { buildStaffsArgumentCompletions } = await load('src/index.ts');
+const presetNames = Object.keys(good.config.presets);
+const allCmds = buildStaffsArgumentCompletions('', presetNames);
+assert(allCmds.length === 6 && allCmds.every((item) => item.value), '空输入应给出全部子命令');
+const fuzzyCmds = buildStaffsArgumentCompletions('p', presetNames);
+assert(fuzzyCmds.some((item) => item.value === 'preset') && fuzzyCmds.some((item) => item.value === 'panel'), '首字母应模糊命中 preset/panel');
+assert(!fuzzyCmds.some((item) => item.value === 'doctor'), '过滤后不该带出不匹配子命令');
+const presetArgs = buildStaffsArgumentCompletions('preset ', presetNames);
+assert(presetArgs.length === presetNames.length && presetArgs.every((item) => presetNames.includes(item.value)), 'preset 参数段应给出全部档位名');
+const presetHit = buildStaffsArgumentCompletions('preset baseline', presetNames);
+assert(presetHit.length === 1 && presetHit[0].value === 'baseline', '档位名输入应模糊到已存在档位');
+const panelF = buildStaffsArgumentCompletions('panel f', presetNames);
+assert(panelF.some((item) => item.value === 'footer') && !panelF.some((item) => item.value === 'widget'), 'panel 参数应模糊到 footer');
+assert(buildStaffsArgumentCompletions('roles ', presetNames).length === 0, '无参数子命令（roles）不应产出建议');
+assert(buildStaffsArgumentCompletions('preset none-x', presetNames).length === 0, '不存在的档位名不应产出建议');
+ok('buildStaffsArgumentCompletions：子命令与二级参数补全、自行模糊过滤');
+
+
 // ---------- 6. guest 内核（桩 agents + 桩时钟） ----------
 const { buildStaffsPrelude } = await load("src/prelude.ts");
 const prelude = buildStaffsPrelude({
