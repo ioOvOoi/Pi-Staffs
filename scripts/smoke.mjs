@@ -423,6 +423,30 @@ assert(rejected.includes("没有档位 nope"), "不存在的档位应被拒绝")
 assert(readConfigFile().preset === "baseline", "拒绝时不该改配置");
 ok("/staffs：列出角色与档位、切档位写盘、拒绝不存在的档位");
 
+// ---------- 5b. applyPresetChange：纯函数切档位（冒烟直接测逻辑、不碰 TUI） ----------
+const rolesPanelMod = await load("src/roles-panel.ts");
+const presetOk = rolesPanelMod.applyPresetChange(good.config, "baseline");
+assert("config" in presetOk, "切到存在的档位应返回成功");
+assert(
+   presetOk.config.preset === "baseline",
+   "成功结果应把 preset 字段改成目标档位",
+);
+assert(
+   presetOk.config.presets === good.config.presets,
+   "切档位只改指针，不该复制或改动任意档位条目",
+);
+const presetMissing = rolesPanelMod.applyPresetChange(good.config, "nope");
+assert(
+   "error" in presetMissing && presetMissing.error.includes("没有档位"),
+   "不存在的档位应拒绝并说明原因",
+);
+const emptyPresets = rolesPanelMod.applyPresetChange(
+   { ...good.config, presets: {} },
+   "baseline",
+);
+assert("error" in emptyPresets, "presets 为空的配置应拒绝切换");
+ok("applyPresetChange：切档位写 preset 字段、拒不存在档位与空档位表");
+
 // ---------- 6. guest 内核（桩 agents + 桩时钟） ----------
 const { buildStaffsPrelude } = await load("src/prelude.ts");
 const prelude = buildStaffsPrelude({

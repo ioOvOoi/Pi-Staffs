@@ -1,6 +1,7 @@
 import {
    isToolCallEventType,
    type ExtensionAPI,
+   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import {
    PANEL_MODES,
@@ -20,7 +21,7 @@ import { extractReceipts, recordReceipts } from "./attempts.ts";
 import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
 import { formatDoctorReport, registerStaffsTools } from "./tools.ts";
 import { listStaffsSkills, syncStaffsSkills } from "./skills.ts";
-import { openRolesPanel } from "./roles-panel.ts";
+import { openPresetSwitcher, openRolesPanel, type RolesPanelIO } from "./roles-panel.ts";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import {
    footerSummary,
@@ -182,10 +183,51 @@ export default function piStaffs(pi: ExtensionAPI): void {
          cache = { config: outcome.config, path: outcome.path };
          const { config, path } = outcome;
          const available = Object.keys(config.presets ?? {});
+         /** 交互面板的宿主依赖统一注入：roles 与 preset 两个面板共用同一套读写/提示。 */
+         const makePanelIO = (ctx: ExtensionCommandContext): RolesPanelIO => ({
+            load: () => loadStaffsConfig(),
+            save: (next, at) => {
+               writeStaffsConfig(next, at);
+               cache = { config: next, path: at };
+            },
+            aliases: () => readAliases(fabricConfigPath()),
+            models: () => {
+               // scopedModels 与内建 /model 选择器同源；为空才枚举全量目录。
+               // Model 形状按 provider+id 防御性读取：id 自带斜杠就不再拼 provider。
+               // SAFETY: ctx 的 scopedModels/modelRegistry 是宿主私有形状、不在公开类型里，
+               // 这里只防御性读取：后续访问全部有 typeof 门禁或 ?. 兜底，缺字段也不会抛。
+               const holder = ctx as unknown as {
+                  scopedModels?: ReadonlyArray<{ model: unknown }>;
+                  modelRegistry?: { getAvailable?: () => unknown[] };
+               };
+               const scoped = holder.scopedModels ?? [];
+               const source: unknown[] = scoped.length
+                  ? scoped.map((entry) => entry.model)
+                  : (holder.modelRegistry?.getAvailable?.() ?? []);
+               const items: SelectItem[] = [];
+               const seen = new Set<string>();
+               for (const model of source) {
+                  const record = (model ?? {}) as { provider?: unknown; id?: unknown };
+                  const provider = typeof record.provider === "string" ? record.provider : "";
+                  const id = typeof record.id === "string" ? record.id : "";
+                  const ref = id.includes("/") ? id : provider && id ? `${provider}/${id}` : id || provider;
+                  if (!ref || seen.has(ref)) continue;
+                  seen.add(ref);
+                  items.push({ value: ref, label: ref });
+               }
+               return items;
+            },
+            notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
+         });
 
          if (requested === "preset" || requested.startsWith("preset ")) {
             const name = requested.slice("preset".length).trim();
             if (!name) {
+               if (ctx.mode === "tui") {
+                  // TUI 有交互面板：直接开档位切换器，选完即写盘，用户无需记住档位名。
+                  await openPresetSwitcher(ctx, makePanelIO(ctx));
+                  return;
+               }
                ctx.ui.notify(
                   `Pi-Staffs 档位：${activePresetName(config) || "（无：各角色用基线模型）"}\n可用：${available.join(", ") || "（空）"}\n切换：/staffs preset <名字>`,
                   "info",
@@ -213,40 +255,8 @@ export default function piStaffs(pi: ExtensionAPI): void {
 
          if (requested === "roles" || requested.startsWith("roles ")) {
             // 交互面板：逐角色调模型与思考档。写回语义见 roles-panel.applyRoleChange；
-            // 这里把 ctx 能力（模型清单、提示）注入进去，面板逻辑保持无宿主依赖、可冒烟。
-            await openRolesPanel(ctx, {
-               load: () => loadStaffsConfig(),
-               save: (next, at) => {
-                  writeStaffsConfig(next, at);
-                  cache = { config: next, path: at };
-               },
-               aliases: () => readAliases(fabricConfigPath()),
-               models: () => {
-                  // scopedModels 与内建 /model 选择器同源；为空才枚举全量目录。
-                  // Model 形状按 provider+id 防御性读取：id 自带斜杠就不再拼 provider。
-                  const holder = ctx as unknown as {
-                     scopedModels?: ReadonlyArray<{ model: unknown }>;
-                     modelRegistry?: { getAvailable?: () => unknown[] };
-                  };
-                  const scoped = holder.scopedModels ?? [];
-                  const source: unknown[] = scoped.length
-                     ? scoped.map((entry) => entry.model)
-                     : (holder.modelRegistry?.getAvailable?.() ?? []);
-                  const items: SelectItem[] = [];
-                  const seen = new Set<string>();
-                  for (const model of source) {
-                     const record = (model ?? {}) as { provider?: unknown; id?: unknown };
-                     const provider = typeof record.provider === "string" ? record.provider : "";
-                     const id = typeof record.id === "string" ? record.id : "";
-                     const ref = id.includes("/") ? id : provider && id ? `${provider}/${id}` : id || provider;
-                     if (!ref || seen.has(ref)) continue;
-                     seen.add(ref);
-                     items.push({ value: ref, label: ref });
-                  }
-                  return items;
-               },
-               notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
-            });
+            // 宿主依赖统一走 makePanelIO（roles 与 preset 面板共用同一套读写/提示）。
+            await openRolesPanel(ctx, makePanelIO(ctx));
             return;
          }
 

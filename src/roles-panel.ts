@@ -97,6 +97,25 @@ export const applyRoleChange = (
    };
 };
 
+/**
+ * 纯函数：切换当前档位。preset 只是「指针」：改这一个字段就换整套覆盖（presets[名字]
+ * 已经存在），不复制也不改动任何档位条目。独立导出与 applyRoleChange 同因：冒烟能
+ * 直接测逻辑、不碰 TUI。
+ * 为什么不存在要报 error 而不是静默忽略：面板要向用户说清拒绝原因；正常流程选不到
+ * 不存在的名字（选项来自 presets 的键），这是纯防御。
+ */
+export const applyPresetChange = (
+   config: StaffsConfig,
+   name: string,
+): { config: StaffsConfig; note: string } | { error: string } => {
+   if (!config.presets?.[name])
+      return { error: "Pi-Staffs 没有档位：" + name };
+   return {
+      config: { ...config, preset: name },
+      note: "档位已切到 " + name + "（本会话后续派发生效）",
+   };
+};
+
 /** HOST 侧展示：角色当前生效模型（别名已解释成 provider/model 直引）。 */
 const modelRefOf = (
    config: StaffsConfig,
@@ -187,10 +206,20 @@ export const openRolesPanel = async (
             }${overlay ? "（档位覆盖）" : ""}`,
          };
       });
+      roleItems.push({
+         value: "__presets__",
+         label: "切换档位预设",
+         description: "当前档位：" + (active || "（无）"),
+      });
       roleItems.push({ value: "__close__", label: "关闭面板", description: path });
 
       const role = await pickOne(ctx, `角色矩阵（档位：${active || "无"}）`, roleItems);
       if (!role || role === "__close__") return;
+      if (role === "__presets__") {
+         // 进档位切换子面板（见 openPresetSwitcher）；关掉后回到角色列表。
+         await openPresetSwitcher(ctx, io);
+         continue;
+      }
       if (!config.roles[role]) continue;
 
       const resolved = resolveRole(config, role);
@@ -249,6 +278,58 @@ export const openRolesPanel = async (
       const chosenLevel = await pickOne(ctx, `选择 ${role} 的思考强度`, levelItems);
       if (!chosenLevel || chosenLevel === resolved?.thinking) continue;
       const result = applyRoleChange(config, role, { kind: "thinking", value: chosenLevel as ThinkingLevel });
+      if ("error" in result) {
+         io.notify(result.error, "warning");
+      } else {
+         io.save(result.config, path);
+         io.notify(result.note, "info");
+      }
+   }
+};
+
+/**
+ * /staffs preset 的交互切换：档位列表 → 选中 → 写入 preset 字段 → 回到列表。
+ * 与 openRolesPanel 同构；非 TUI（RPC/print 没有交互面板）降级为只读文本提示，
+ * 并给出命令行切换方式，保证任何模式都不报错。
+ */
+export const openPresetSwitcher = async (
+   ctx: ExtensionCommandContext,
+   io: RolesPanelIO,
+): Promise<void> => {
+   if (ctx.mode !== "tui") {
+      const { config } = io.load();
+      const active = activePresetName(config);
+      const names = Object.keys(config.presets ?? {}).sort();
+      io.notify(
+         "Pi-Staffs 档位预设可切换：\n" +
+            names
+               .map((name) => "· " + name + (name === active ? "（当前生效）" : ""))
+               .join("\n") +
+            "\n交互面板仅 TUI 可用；非 TUI 请用 /staffs preset <名字> 切换",
+         "info",
+      );
+      return;
+   }
+
+   for (;;) {
+      const { config, path } = io.load();
+      const active = activePresetName(config);
+      const names = Object.keys(config.presets ?? {}).sort();
+      const presetItems: SelectItem[] = names.map((name) => ({
+         value: name,
+         label: name === active ? name + "（当前生效）" : name,
+      }));
+      presetItems.push({ value: "__close__", label: "关闭面板", description: path });
+
+      const chosen = await pickOne(
+         ctx,
+         "切换档位预设（当前：" + (active || "（无）") + "）",
+         presetItems,
+      );
+      if (!chosen || chosen === "__close__") return;
+      // 与当前档位相同等于没切：不写盘不提示，直接回到列表。
+      if (chosen === active) continue;
+      const result = applyPresetChange(config, chosen);
       if ("error" in result) {
          io.notify(result.error, "warning");
       } else {
