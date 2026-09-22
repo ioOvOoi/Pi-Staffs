@@ -17,6 +17,7 @@ import {
    type StaffsConfig,
 } from "./config.ts";
 import { buildStaffsPrelude, readRolePrompt } from "./prelude.ts";
+import { refreshPoolAa } from "./aa-refresh.ts";
 import { resolveRouteMap } from "./route.ts";
 import { extractReceipts, recordReceipts } from "./attempts.ts";
 import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
@@ -114,6 +115,8 @@ export default function piStaffs(pi: ExtensionAPI): void {
       }
       for (const issue of outcome.issues)
          ctx.ui.notify(`Pi-Staffs 配置：${issue}`, "warning");
+      // 票 04：当日未拉则后台刷 AA 快照；fire-and-forget，任何失败都不碰会话启动。
+      void refreshPoolAa().catch(() => {});
    });
 
    pi.on("tool_call", async (event) => {
@@ -343,6 +346,23 @@ export default function piStaffs(pi: ExtensionAPI): void {
             return;
          }
 
+         if (requested.startsWith("jev refresh")) {
+            // 票 04 手动刷新：立即拉取并汇报更新条数；SWE-bench 无 API 永远提醒人工查榜。
+            const result = await refreshPoolAa();
+            if ("updated" in result)
+               ctx.ui.notify(
+                  `AA 快照已刷新：更新 ${result.updated} 条（${result.path}）。\n提醒：SWE-bench 无 API，需人工查榜更新对应列。`,
+                  "info",
+               );
+            else if ("skipped" in result)
+               ctx.ui.notify(
+                  `AA 拉取跳过：${result.reason}${result.guidance ? `\n${result.guidance}` : ""}`,
+                  "warning",
+               );
+            else ctx.ui.notify(result.error, "warning");
+            return;
+         }
+
          if (requested === "jev" || requested.startsWith("jev ")) {
             // 只读路由审计面板：跨包读共享池文件的 routingLog 段（票 03 落盘）。
             // 池缺/空/坏由 loadJevPanelData → loadPool 兜底成空池，该段显示「暂无路由记录」，
@@ -395,6 +415,7 @@ export function buildStaffsArgumentCompletions(
    ];
    const ARGUMENTS: Record<string, AutocompleteItem[]> = {
       preset: presetNames.map((name) => ({ value: name, label: name, description: '模型档位' })),
+      jev: [{ value: 'refresh', label: 'refresh', description: '立即拉取 AA 快照写回池' }],
       panel: [
          { value: 'footer', label: 'footer', description: 'footer 一行数字' },
          { value: 'widget', label: 'widget', description: '常驻面板' },

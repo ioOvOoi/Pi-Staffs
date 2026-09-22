@@ -1932,6 +1932,108 @@ assert(jevEmptyText.includes("no-such-jev-pool.json"), "面板应标出实际读
 delete process.env.PI_STAFFS_POOL;
 ok("/staffs jev：命令层读池文件渲染路由日志；池缺优雅降级不崩");
 
+// 7) AA 每日拉取与池快照写回（票 04）：成功写回 / 当日幂等 / 无 key / 网络失败。
+const aa = await load("src/aa-refresh.ts");
+const aaPoolPath = path.join(sandbox, "model-pool.json");
+const aaNow = () => new Date("2026-09-22T10:00:00Z");
+const writePoolFixture = (entries) =>
+   writeFileSync(aaPoolPath, JSON.stringify({ entries, routingLog: [] }));
+const stubKey = async () => ({ key: "aa-key", source: "env" });
+// 桩形状对齐官方 /api/v2/language/models/free 响应（librarian 2026-09 核实）
+const aaItem = (slug, ii, inP, outP, tps) => ({
+   slug,
+   evaluations: { artificial_analysis_intelligence_index: ii },
+   pricing: { price_1m_input_tokens: inP, price_1m_output_tokens: outP },
+   performance: { median_output_tokens_per_second: tps },
+});
+const okFetch = async (url) => {
+   okFetch.pages = okFetch.pages ?? [];
+   okFetch.pages.push(String(url));
+   return {
+      ok: true,
+      json: async () => ({
+         data: [aaItem("glm-5.3", 91, 5, 15, 40), aaItem("other-model", 70, 2, 8, 30)],
+         pagination: { page: 1, page_size: 200, total_pages: 1, has_more: false },
+      }),
+   };
+};
+
+// 成功写回：slug 匹配池 id 尾段；未收录条目原样保留
+writePoolFixture([
+   { id: "ollama-cloud/glm-5.3", platform: "cloud", thinkingLevels: ["low"], description: "x", manualTier: 4 },
+   { id: "ollama/deepseek-v4-flash:0731", platform: "ollama", thinkingLevels: ["low"], description: "y", manualTier: 2 },
+]);
+const okResult = await aa.refreshPoolAa({
+   fetchImpl: okFetch,
+   resolveAaKeyImpl: stubKey,
+   now: aaNow,
+   poolPath: aaPoolPath,
+   env: {},
+});
+const okPool = JSON.parse(readFileSync(aaPoolPath, "utf-8"));
+assert(okResult.updated === 1, `应只更新收录的 1 条：${JSON.stringify(okResult)}`);
+assert(
+   okPool.entries[0].aa?.intelligenceIndex === 91 && okPool.entries[0].aa?.inPrice === 5,
+   "快照列应写回",
+);
+assert(
+   okPool.entries[0].aa?.refreshedAt === "2026-09-22T10:00:00.000Z",
+   "refreshedAt 应为 ISO 时间戳",
+);
+assert(
+   okFetch.pages[0].includes("language/models/free") && okFetch.pages[0].includes("page=1"),
+   `请求应打免费端点带 page 参数：${okFetch.pages[0]}`,
+);
+assert(okPool.entries[1].aa === undefined, "未收录条目应原样保留");
+
+// 当日幂等：已拉过今天直接返回，不再触网、不再读 key
+const idemResult = await aa.refreshPoolAa({
+   fetchImpl: async () => {
+      throw new Error("不应触网");
+   },
+   resolveAaKeyImpl: async () => {
+      throw new Error("不应读 key");
+   },
+   now: aaNow,
+   poolPath: aaPoolPath,
+   env: {},
+});
+assert(idemResult.updated === 0, `当日已拉应幂等返回：${JSON.stringify(idemResult)}`);
+
+// 无 key：跳过 + 指引
+writePoolFixture([{ id: "x/y", platform: "cloud", thinkingLevels: ["low"], description: "" }]);
+const noKey = await aa.refreshPoolAa({
+   fetchImpl: okFetch,
+   resolveAaKeyImpl: async () => ({ key: null, source: "missing", guidance: "去注册" }),
+   now: aaNow,
+   poolPath: aaPoolPath,
+   env: {},
+});
+assert(
+   noKey.skipped === true && noKey.guidance === "去注册",
+   `无 key 应带指引跳过：${JSON.stringify(noKey)}`,
+);
+
+// 网络失败：报 error 不崩、池未改动
+const failResult = await aa.refreshPoolAa({
+   fetchImpl: async () => {
+      throw new Error("ECONNREFUSED");
+   },
+   resolveAaKeyImpl: stubKey,
+   now: aaNow,
+   poolPath: aaPoolPath,
+   env: {},
+});
+assert(
+   typeof failResult.error === "string" && failResult.error.includes("ECONNREFUSED"),
+   `网络失败应报 error：${JSON.stringify(failResult)}`,
+);
+assert(
+   JSON.parse(readFileSync(aaPoolPath, "utf-8")).entries[0].aa === undefined,
+   "失败时池不得被改动",
+);
+ok("AA 刷新：成功写回/当日幂等/无 key 降级/网络失败不崩（四路径）");
+
 // 全部段落跑完才清场（票 03 段共用同一 sandbox）。
 rmSync(sandbox, { recursive: true, force: true });
 console.log(`smoke ok（${checks.length} 项）：`);
