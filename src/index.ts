@@ -17,6 +17,7 @@ import {
    type StaffsConfig,
 } from "./config.ts";
 import { buildStaffsPrelude, readRolePrompt } from "./prelude.ts";
+import { resolveRouteMap } from "./route.ts";
 import { extractReceipts, recordReceipts } from "./attempts.ts";
 import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
 import { formatDoctorReport, registerStaffsTools } from "./tools.ts";
@@ -43,6 +44,7 @@ const DISPATCH_GUIDANCE = [
    "团队协作：staffs_board 看看板、staffs_goal 记目标与验收标准、staffs_task 管 DAG、staffs_mail 传话、staffs_ticket 收发 tracker 票。",
    "不要在派发点传 model / thinking / tools——模型由当前档位（preset）决定，thinking 与 tools 由角色矩阵集中强制；返回值 attempts 记录了每次重试与退避。",
    "写操作保持单写者（D5）：读可以并行，写要串行或放进 staffs_worktree 隔离区。",
+   "run/spawn 的 (model, thinking) 可能由 Jev 路由池按任务选型（prelude 的 you 段落为准）；不要在派发点手传模型，staffs.run({ route: false }) 可跳过路由回到档位矩阵。",
 ].join("\n");
 
 /** 一行展示某个角色在当前档位下的实际模型（HOST 侧解释别名，guest 侧只看解析结果）。 */
@@ -113,7 +115,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
          ctx.ui.notify(`Pi-Staffs 配置：${issue}`, "warning");
    });
 
-   pi.on("tool_call", (event) => {
+   pi.on("tool_call", async (event) => {
       if (
          !isToolCallEventType("fabric_exec", event) ||
          typeof event.input.code !== "string"
@@ -123,8 +125,14 @@ export default function piStaffs(pi: ExtensionAPI): void {
       // prelude 挂到入参而不是拼进 code（pi-fabric ≥ 0.93.0）：门禁与源映射都归宿主，模型的
       // 代码一个字都不动。过去拼字符串时，prelude 里任何类型错误都会以模型代码的行号报出来，
       // 并把整条 fabric_exec 通道一起拒掉（见本仓 67ae6d5 的实机故障）。
+      // 票 03：派发前先让 Jev 按角色答三问，从模型池选出 (model, thinking) 覆盖档位；
+      // 任何失败路径 resolveRouteMap 都返回空表，档位矩阵原样生效（派发永不阻塞）。
+      const routes = await resolveRouteMap(config, readAliases(fabricConfigPath()), {
+         taskContext: String(event.input.code ?? "").slice(0, 1500),
+      });
       event.input.prelude = buildStaffsPrelude({
          config,
+         routes,
          promptFallback: readRolePrompt,
       });
    });

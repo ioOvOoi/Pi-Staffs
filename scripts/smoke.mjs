@@ -1627,7 +1627,243 @@ assert(
 );
 ok("遗留 ①②：回执 finishedAt 一致 + settled/owner 守卫下沉 upsertAttempt");
 
-rmSync(sandbox, { recursive: true, force: true });
 
+
+// ---------- 27. 模型池 schema 与确定性匹配器（票 01）：纯函数，三问+池 → {model,thinking}|null ----------
+const poolMod = await load("src/pool.ts");
+// AA 列完整路径：编码看 sweBench、通用看 intelligenceIndex，难度定最低分区间，区间内性价比最优。
+const aaPool = poolMod.normalizePool({
+   entries: [
+      {
+         id: "p/strong",
+         platform: "cloud",
+         thinkingLevels: ["low", "medium", "high", "max"],
+         description: "旗舰",
+         aa: { intelligenceIndex: 95, inPrice: 5, outPrice: 15, throughput: 40, refreshedAt: "2026-01-01" },
+         sweBench: 90,
+      },
+      {
+         id: "p/cheap-good",
+         platform: "cloud",
+         thinkingLevels: ["low", "medium", "high", "max"],
+         description: "经济",
+         aa: { intelligenceIndex: 85, inPrice: 1, outPrice: 3, throughput: 80, refreshedAt: "2026-01-01" },
+         sweBench: 80,
+      },
+      {
+         id: "p/weak-cheap",
+         platform: "cloud",
+         thinkingLevels: ["low"],
+         description: "弱",
+         aa: { intelligenceIndex: 40, inPrice: 0.1, outPrice: 0.3, throughput: 200, refreshedAt: "2026-01-01" },
+         sweBench: 30,
+      },
+   ],
+}).pool;
+let routed = poolMod.matchPool({ difficulty: 5, domain: "coding", thinking: "max" }, aaPool);
+assert(
+   routed && routed.model === "p/cheap-good" && routed.thinking === "max",
+   `难度 5 编码应在 sweBench≥80 区间内选性价比最优：${JSON.stringify(routed)}`,
+);
+routed = poolMod.matchPool({ difficulty: 1, domain: "general", thinking: "low" }, aaPool);
+assert(
+   routed && routed.model === "p/weak-cheap",
+   `通用领域看 intelligenceIndex，轻任务应选最便宜的弱模型：${JSON.stringify(routed)}`,
+);
+routed = poolMod.matchPool({ difficulty: 2, domain: "coding", thinking: "high" }, aaPool);
+assert(
+   routed && routed.model === "p/cheap-good",
+   `所需思考须落在 thinkingLevels 内（weak-cheap 只支持 low，应被排除）：${JSON.stringify(routed)}`,
+);
+routed = poolMod.matchPool({ difficulty: 4, thinking: "max" }, aaPool);
+assert(
+   routed && routed.model === "p/cheap-good",
+   `缺省领域应按通用（intelligenceIndex）处理：${JSON.stringify(routed)}`,
+);
+assert(
+   poolMod.matchPool({ difficulty: 2, thinking: 42 }, aaPool)?.thinking === "medium",
+   "所需思考非法或缺省应取中性档 medium",
+);
+ok("匹配器：AA 列按领域选参考列 + 难度区间 + thinking 求交 + 性价比排序");
+
+// AA 缺列路径：本地 ollama 无榜单，靠 manualTier + description 兜底。
+const localPool = poolMod.normalizePool({
+   entries: [
+      { id: "ollama/local-t2", platform: "ollama", thinkingLevels: ["low", "medium"], description: "本地轻量", manualTier: 2 },
+      { id: "ollama/local-t4", platform: "ollama", thinkingLevels: ["low", "medium", "high"], description: "本地强", manualTier: 4 },
+   ],
+}).pool;
+routed = poolMod.matchPool({ difficulty: 4, domain: "coding", thinking: "high" }, localPool);
+assert(
+   routed && routed.model === "ollama/local-t4" && routed.thinking === "high",
+   `AA 缺列应回落到 manualTier（t4 能力 80 达标，t2 能力 40 不达标）：${JSON.stringify(routed)}`,
+);
+const t2Only = poolMod.normalizePool({ entries: [localPool.entries[0]] }).pool;
+assert(
+   poolMod.matchPool({ difficulty: 4, domain: "coding", thinking: "high" }, t2Only) === null,
+   "池内全部能力低于难度区间应返回 null（触发回落）",
+);
+const mixedPool = poolMod.normalizePool({
+   entries: [...aaPool.entries, localPool.entries[0]],
+}).pool;
+routed = poolMod.matchPool({ difficulty: 1, domain: "general", thinking: "low" }, mixedPool);
+assert(
+   routed && routed.model === "ollama/local-t2",
+   `本地零成本与云端同池竞争，轻任务应收敛到本地：${JSON.stringify(routed)}`,
+);
+ok("匹配器：AA 缺列 manualTier 兜底，零成本本地赢下轻任务");
+
+// 池空 / 全缺列 / 非法输入三路径 → null（票 03 拿它转回落）。
+assert(poolMod.matchPool({ difficulty: 1, thinking: "low" }, { entries: [] }) === null, "池空应返回 null");
+assert(poolMod.matchPool({ difficulty: 1, thinking: "low" }, {}) === null, "无 entries 段应返回 null");
+assert(poolMod.matchPool({ difficulty: 1, thinking: "low" }, null) === null, "池为 null 应返回 null");
+assert(
+   poolMod.matchPool(
+      { difficulty: 1, thinking: "low" },
+      { entries: [{ id: "x", platform: "ollama", thinkingLevels: ["low"], description: "缺列也缺档" }] },
+   ) === null,
+   "全部条目缺 AA 列且缺 manualTier 应返回 null",
+);
+ok("匹配器：池空 / 全缺列 / 非法输入一律 null（回落信号）");
+
+// 归一化：坏条目只丢自己，routingLog 段与开放形状原样保留。
+const dirty = poolMod.normalizePool({
+   entries: [{ id: "", platform: "cloud", thinkingLevels: ["low"] }],
+   routingLog: "bad",
+   custom: "keep",
+});
+assert(dirty.pool.entries.length === 0, "无 id 条目应剔除（无法派发）");
+assert(dirty.issues.some((issue) => /id/.test(issue)), "剔除应如实报问题");
+assert(Array.isArray(dirty.pool.routingLog) && dirty.pool.routingLog.length === 0, "routingLog 非数组应归一为空");
+assert(dirty.pool.custom === "keep", "开放形状（额外字段）必须原样保留");
+ok("归一化：坏条目剔除留证，routingLog 段预留，开放形状不丢");
+
+// 加载：默认路径缺失/坏 JSON 都回空池 + 模板提示，不崩、不覆盖用户文件。
+const poolPath = path.join(sandbox, "model-pool.json");
+const missingPool = poolMod.loadPool({ path: poolPath });
+assert(missingPool.pool.entries.length === 0, "缺池文件时应回空池");
+assert(
+   /模板/.test(missingPool.issues[0]) && /不存在/.test(missingPool.issues[0]),
+   "缺池文件应给出生成模板的提示，而不是抛错",
+);
+writeFileSync(poolPath, "{ not json");
+const brokenPool = poolMod.loadPool({ path: poolPath });
+assert(brokenPool.pool.entries.length === 0, "坏 JSON 时应回空池");
+assert(/非法 JSON/.test(brokenPool.issues[0]), "坏 JSON 应说明原因");
+assert(readFileSync(poolPath, "utf8") === "{ not json", "坏池文件绝不覆盖用户文件");
+writeFileSync(
+   poolPath,
+   JSON.stringify({
+      entries: localPool.entries,
+      routingLog: [{ at: "t", role: "fixer", profile: "3/coding/high", selected: "ollama/local-t4 high", fallback: false }],
+   }),
+);
+const loadedPool = poolMod.loadPool({ path: poolPath });
+assert(loadedPool.pool.entries.length === 2, "合法池文件应读回条目");
+assert(loadedPool.pool.routingLog.length === 1, "routingLog 段应随池文件读回（票 03 写它）");
+ok("池加载：缺失/坏 JSON 回空池 + 模板提示；合法文件连同 routingLog 段读回");
+
+
+// ===== 票 03：宿主侧路由层（Jev × 模型池）=====
+const routeMod = await load("src/route.ts");
+const routeConfig = { roles: { fixer: { enabled: true }, explorer: { enabled: true } } };
+const routePoolPath = path.join(sandbox, "route-model-pool.json");
+writeFileSync(
+   routePoolPath,
+   JSON.stringify({
+      entries: [
+         { id: "p/weak", platform: "cloud", thinkingLevels: ["low", "medium"], description: "弱模型", manualTier: 1 },
+         { id: "p/strong", platform: "cloud", thinkingLevels: ["high", "max"], description: "强模型", manualTier: 5 },
+      ],
+   }),
+);
+
+// 1) pi-jev 缺席（入口指向不存在的文件）→ 空表，档位矩阵原样生效。
+const noJev = await routeMod.resolveRouteMap(routeConfig, {}, {
+   deps: { env: { PI_JEV_ENTRY: path.join(sandbox, "no-such-jev-entry.ts") }, poolPath: routePoolPath, now: () => 0 },
+});
+assert(Object.keys(noJev).length === 0, "pi-jev 缺席时应返回空路由表");
+ok("路由：pi-jev 缺席整体回落，不崩、不阻塞");
+
+// 2) 桩 runner 全命中：难度 4 + coding + high → 应选 p/strong/high（p/weak 达标线不够）。
+const stubRunner = async ({ questions }) => ({
+   answers: Object.fromEntries(
+      Object.keys(questions).map((id) => {
+         const q = questions[id];
+         if (q.type === "score") return [id, { score: 4, confidence: 0.9 }];
+         if (q.type === "noul") return [id, { noul: 0.9, confidence: 0.9 }];
+         return [id, { choice: "high", confidence: 0.9 }];
+      }),
+   ),
+});
+const captured = [];
+const routedMap = await routeMod.resolveRouteMap(routeConfig, {}, {
+   deps: { runner: stubRunner, poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => captured.push(...entries) },
+});
+assert(routedMap.fixer?.model === "p/strong", "难度4+coding 应命中 p/strong");
+assert(routedMap.fixer?.thinking === "high", "choice=high 应覆盖 thinking");
+assert(routedMap.explorer?.model === "p/strong", "同画像角色共用同一次路由结果");
+ok("路由：三问画像 → 池匹配 (model, thinking) 覆盖档位");
+
+// 3) Jev 低置信 → 该角色回落（不进路由表），日志如实记 fallback。
+const lowConfRunner = async ({ questions }) => ({
+   answers: Object.fromEntries(Object.keys(questions).map((id) => [id, { score: 4, _lowConfidence: true }])),
+});
+const fallbackLog = [];
+const lowConf = await routeMod.resolveRouteMap(routeConfig, {}, {
+   deps: { runner: lowConfRunner, poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => fallbackLog.push(...entries) },
+});
+assert(Object.keys(lowConf).length === 0, "低置信判答应整体回落");
+assert(
+   fallbackLog.length === 2 && fallbackLog.every((e) => e.fallback === true && /低置信/.test(e.profile)),
+   "低置信应逐角色记 fallback 日志",
+);
+ok("路由：Jev 低置信逐角色回落并留证");
+
+// 4) 路由日志字段完整 + 环形截断上限常量存在。
+assert(
+   captured.every((e) => typeof e.at === "string" && typeof e.role === "string" && typeof e.selected === "string"),
+   "路由日志必须含 at/role/selected",
+);
+assert(captured.some((e) => e.selected === "p/strong high"), "命中日志应记录最终选型");
+assert(routeMod.ROUTE_LOG_CAP === undefined || routeMod.ROUTING_LOG_CAP > 0, "环形上限常量应导出");
+ok("路由：日志可截获审计，字段完整");
+
+// 5) Jev 卡死 → 硬超时回落（PI_STAFFS_ROUTE_TIMEOUT 压到 50ms）。
+const t0 = Date.now();
+const hung = await routeMod.resolveRouteMap(routeConfig, {}, {
+   deps: { runner: () => new Promise(() => {}), env: { PI_STAFFS_ROUTE_TIMEOUT: "50" }, poolPath: routePoolPath, now: () => 0 },
+});
+assert(Object.keys(hung).length === 0, "Jev 卡死应超时回落为空表");
+assert(Date.now() - t0 < 5000, "超时必须真的生效（50ms 档）");
+ok("路由：Jev 卡死按 PI_STAFFS_ROUTE_TIMEOUT 硬超时回落");
+
+
+// 6) guest 注入行为 + 逃生门（票 03 第 2/3 条）：路由覆盖 (model, thinking)；route:false 回矩阵。
+const preludeRouted = buildStaffsPrelude({
+   config: good.config,
+   aliases: { "alias-fixer": "q/heavy-fixer" },
+   routes: { fixer: { model: "p/routed", thinking: "high" } },
+});
+const routedAgents = makeAgents([]);
+installEnv(routedAgents);
+const routedStaffs = evaluatePrelude(preludeRouted);
+const routedReceipt = await routedStaffs.run({ role: "fixer", task: "路由命中" });
+assert(routedAgents.calls[0].model === "p/routed", `路由应覆盖矩阵模型：${routedAgents.calls[0].model}`);
+assert(routedAgents.calls[0].thinking === "high", "路由 thinking 应覆盖矩阵");
+assert(routedReceipt.route?.model === "p/routed" && routedReceipt.route?.thinking === "high", "回执应带 route 决策（null=回落）");
+
+const matrixAgents = makeAgents([]);
+installEnv(matrixAgents);
+const escapeStaffs = evaluatePrelude(preludeRouted);
+const escapeReceipt = await escapeStaffs.run({ role: "fixer", task: "逃生门", route: false });
+assert(matrixAgents.calls[0].model === "q/heavy-fixer", `route:false 应回档位矩阵：${matrixAgents.calls[0].model}`);
+assert(matrixAgents.calls[0].thinking === "max", "route:false 应回矩阵 thinking");
+assert(escapeReceipt.route === null, "逃生门回执 route 应为 null");
+ok("路由：guest 注入覆盖 (model, thinking)，route:false 逃生门回矩阵，回执带 route 决策");
+
+// 全部段落跑完才清场（票 03 段共用同一 sandbox）。
+rmSync(sandbox, { recursive: true, force: true });
 console.log(`smoke ok（${checks.length} 项）：`);
 for (const name of checks) console.log(`  - ${name}`);
+

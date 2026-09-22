@@ -26,6 +26,7 @@ import {
    type CouncilConfig,
    type StaffsConfig,
 } from "./config.ts";
+import type { RouteDecision } from "./route.ts";
 import { checkRolePermissions, readPermissions } from "./permissions.ts";
 
 const kernelPath = fileURLToPath(new URL("./guest/kernel.js", import.meta.url));
@@ -50,6 +51,7 @@ export const readRolePrompt = (role: string): string | undefined => {
 
 export type PreludeOptions = {
    config: StaffsConfig;
+   routes?: Record<string, RouteDecision>;
    aliases?: Record<string, string>;
    kernel?: string;
    promptFallback?: (role: string) => string | undefined;
@@ -78,6 +80,7 @@ export const COUNCIL_SYNTH_INSTRUCTIONS = [
 
 export const buildStaffsPrelude = (options: PreludeOptions): string => {
    const { config } = options;
+   const routes = options.routes ?? {};
    const aliases = options.aliases ?? readAliases();
    const instructions = effectiveRoleInstructions(
       config,
@@ -143,6 +146,7 @@ export const buildStaffsPrelude = (options: PreludeOptions): string => {
 const __staffsPreset = ${JSON.stringify(preset)};
 const __staffsRoles = ${JSON.stringify(roles)};
 const __staffsModels = ${JSON.stringify(models)};
+const __staffsRoutes = ${JSON.stringify(routes)};
 const __staffsDispatch = ${JSON.stringify(dispatch)};
 const __staffsPolicyConfig = ${JSON.stringify(policy)};
 const __staffsCouncilConfig = ${JSON.stringify(council)};
@@ -172,10 +176,13 @@ const __staffsResolveRole = (request) => {
    if (banned.length) throw new Error("Pi-Staffs 角色 " + name + " 被禁止使用工具：" + banned.join(", "));
    if (outside.length)
       throw new Error("Pi-Staffs 角色 " + name + " 的 tools 白名单不含：" + outside.join(", "));
+   // 逃生门（票 03 第 3 条）：调用方显式 route:false/"matrix" → 本次派发回到档位矩阵。
+   const routed = input.route === false || input.route === "matrix" ? undefined : __staffsRoutes[name];
    return {
       name,
       role,
-      request: { ...rest, thinking: role.thinking, tools: role.tools, ...(role.timeoutMs ? { timeoutMs: role.timeoutMs } : {}) },
+      routed,
+      request: { ...rest, thinking: routed?.thinking ?? role.thinking, tools: role.tools, ...(role.timeoutMs ? { timeoutMs: role.timeoutMs } : {}) },
       task: __staffsCombine(instructions !== undefined ? instructions : role.instructions, task),
    };
 };
@@ -185,7 +192,7 @@ const __staffsDispatchRun = (request, spawn) => {
    const resolved = __staffsResolveRole(request);
    return __staffsRun({
       host: __staffsHost(),
-      model: __staffsModels[resolved.name] || "",
+      model: resolved.routed?.model || __staffsModels[resolved.name] || "",
       task: resolved.task,
       request: resolved.request,
       policy: __staffsPolicyConfig,
@@ -194,6 +201,7 @@ const __staffsDispatchRun = (request, spawn) => {
    }).then((receipt) => ({
       ...receipt,
       role: resolved.name,
+      route: resolved.routed || null,
       attempts: (receipt.attempts || []).map((attempt) => ({
          ...attempt,
          role: resolved.name,
@@ -222,7 +230,7 @@ const staffs = {
             "Unknown Pi-Staffs role: " + unknown[0] +
                "（可用：" + Object.keys(__staffsRoles).join(", ") + "）",
          );
-      return __staffsPreflight(__staffsHost(), __staffsModels, roles);
+      return __staffsPreflight(__staffsHost(), { ...__staffsModels, ...Object.fromEntries(Object.entries(__staffsRoutes).map(([k, v]) => [k, v.model])) }, roles);
    },
    preflightCouncil: () => {
       const map = {};
