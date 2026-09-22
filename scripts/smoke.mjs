@@ -451,7 +451,8 @@ ok("applyPresetChange：切档位写 preset 字段、拒不存在档位与空档
 const { buildStaffsArgumentCompletions } = await load('src/index.ts');
 const presetNames = Object.keys(good.config.presets);
 const allCmds = buildStaffsArgumentCompletions('', presetNames);
-assert(allCmds.length === 6 && allCmds.every((item) => item.value), '空输入应给出全部子命令');
+assert(allCmds.length === 7 && allCmds.every((item) => item.value), '空输入应给出全部子命令');
+assert(allCmds.some((item) => item.value === 'jev'), '补全应含 jev 子命令');
 const fuzzyCmds = buildStaffsArgumentCompletions('p', presetNames);
 assert(fuzzyCmds.some((item) => item.value === 'preset') && fuzzyCmds.some((item) => item.value === 'panel'), '首字母应模糊命中 preset/panel');
 assert(!fuzzyCmds.some((item) => item.value === 'doctor'), '过滤后不该带出不匹配子命令');
@@ -1861,6 +1862,75 @@ assert(matrixAgents.calls[0].model === "q/heavy-fixer", `route:false 应回档�
 assert(matrixAgents.calls[0].thinking === "max", "route:false 应回矩阵 thinking");
 assert(escapeReceipt.route === null, "逃生门回执 route 应为 null");
 ok("路由：guest 注入覆盖 (model, thinking)，route:false 逃生门回矩阵，回执带 route 决策");
+
+// ---------- 8. /staffs jev：路由日志面板（票 05） ----------
+const jevMod = await load("src/jev-panel.ts");
+const demoLog = [
+   { at: "2026-01-02T03:04:05.000Z", role: "fixer", profile: "难度3/coding/high", selected: "ollama-cloud/glm-5.3 high", fallback: false },
+   { at: "2026-01-02T03:05:05.000Z", role: "oracle", profile: "Jev 低置信/无效判答", selected: "(回落 preset)", fallback: true },
+];
+const logLines = jevMod.formatRoutingLogSection(demoLog);
+assert(logLines.length === 2, "路由日志段应逐条渲染");
+assert(
+   logLines[0].includes("✓ 命中") && logLines[0].includes("2026-01-02 03:04:05"),
+   "命中行应带 ✓ 标记与时间",
+);
+assert(
+   logLines[0].includes("fixer") && logLines[0].includes("难度3/coding/high"),
+   "命中行应带角色与三问摘要",
+);
+assert(logLines[0].includes("ollama-cloud/glm-5.3 high"), "命中行应带选定模型");
+assert(logLines[1].includes("⚠ 回落"), "回落应有可视区分");
+assert(jevMod.formatRoutingLogSection([])[0] === "暂无路由记录", "空日志应显示暂无路由记录");
+assert(jevMod.formatRoutingLogSection(undefined)[0] === "暂无路由记录", "缺段应显示暂无路由记录");
+assert(
+   jevMod.formatRoutingLogSection([
+      null,
+      { role: "x", profile: 1 },
+      { role: "", at: 5 },
+      { role: "y", fallback: "yes" },
+   ]).length === 2,
+   "损坏条目只丢弃缺 role 的，坏 fallback 按非回落处理",
+);
+assert(
+   jevMod.formatRoutingLogSection([{ role: "x", profile: 1 }])[0].includes("（无摘要）"),
+   "坏字段用兜底文案，面板不崩",
+);
+const many = Array.from({ length: 25 }, (_, i) => ({
+   at: `2026-01-02T00:00:0${i % 10}.000Z`,
+   role: `r${i}`,
+   profile: "p",
+   selected: "s",
+   fallback: false,
+}));
+assert(
+   jevMod.formatRoutingLogSection(many).length === jevMod.JEVPANEL_LIMIT,
+   "面板只摊最近判断（上限截断）",
+);
+ok("jev-panel：渲染路由日志段（时间/角色/三问摘要/选定模型/fallback 区分/空态/坏条目/上限）");
+
+// 命令层：/staffs jev 读共享池文件渲染；池缺 → 该段暂无路由记录，面板其余部分不受影响。
+const jevPoolPath = path.join(sandbox, "jev-panel-pool.json");
+writeFileSync(
+   jevPoolPath,
+   JSON.stringify(
+      { entries: [{ id: "ollama/x", platform: "ollama", thinkingLevels: ["low"], description: "d" }], routingLog: demoLog },
+      null,
+      2,
+   ),
+);
+process.env.PI_STAFFS_POOL = jevPoolPath;
+const jevText = await runCommand("jev");
+assert(jevText.includes("【路由日志】最近判断"), "面板应带路由日志段");
+assert(jevText.includes("⚠ 回落") && jevText.includes("✓ 命中"), "命令输出应保留 fallback 区分");
+assert(jevText.includes("池条目 1 ｜ 路由记录 2 条"), "面板摘要（其余部分）应照常渲染");
+process.env.PI_STAFFS_POOL = path.join(sandbox, "no-such-jev-pool.json");
+const jevEmptyText = await runCommand("jev");
+assert(jevEmptyText.includes("暂无路由记录"), "池缺时该段应显示暂无路由记录");
+assert(jevEmptyText.includes("池条目 0"), "池缺时面板其余部分不受影响");
+assert(jevEmptyText.includes("no-such-jev-pool.json"), "面板应标出实际读取的池路径");
+delete process.env.PI_STAFFS_POOL;
+ok("/staffs jev：命令层读池文件渲染路由日志；池缺优雅降级不崩");
 
 // 全部段落跑完才清场（票 03 段共用同一 sandbox）。
 rmSync(sandbox, { recursive: true, force: true });

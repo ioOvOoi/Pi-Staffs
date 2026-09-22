@@ -128,7 +128,7 @@ const modelRefOf = (
 };
 
 /** 复用官方 Pattern 1：SelectList 选择框，返回所选 value；esc / 关闭返回 null。 */
-const pickOne = async (
+export const pickOne = async (
    ctx: ExtensionCommandContext,
    title: string,
    items: SelectItem[],

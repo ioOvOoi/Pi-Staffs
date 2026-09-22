@@ -23,6 +23,7 @@ import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
 import { formatDoctorReport, registerStaffsTools } from "./tools.ts";
 import { listStaffsSkills, syncStaffsSkills } from "./skills.ts";
 import { openPresetSwitcher, openRolesPanel, type RolesPanelIO } from "./roles-panel.ts";
+import { loadJevPanelData, openJevPanel, type JevPanelIO } from "./jev-panel.ts";
 import type { AutocompleteItem, SelectItem } from "@earendil-works/pi-tui";
 import {
    footerSummary,
@@ -342,13 +343,25 @@ export default function piStaffs(pi: ExtensionAPI): void {
             return;
          }
 
+         if (requested === "jev" || requested.startsWith("jev ")) {
+            // 只读路由审计面板：跨包读共享池文件的 routingLog 段（票 03 落盘）。
+            // 池缺/空/坏由 loadJevPanelData → loadPool 兜底成空池，该段显示「暂无路由记录」，
+            // 面板其余部分照常渲染（不崩、不写池文件）。样式同 roles/preset 面板。
+            const jevIO: JevPanelIO = {
+               load: () => loadJevPanelData(),
+               notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
+            };
+            await openJevPanel(ctx, jevIO);
+            return;
+         }
+
          const aliases = readAliases(fabricConfigPath());
          const lines = Object.keys(config.roles).map((name) =>
             describeRole(config, aliases, name),
          );
          const council = resolveCouncilModels(config, aliases);
          ctx.ui.notify(
-            `Pi-Staffs ${PI_STAFFS_VERSION} — ${path}\n档位：${activePresetName(config) || "（无）"}｜可用：${available.join(", ") || "（空）"}\n${lines.join("\n")}\n合议：${council.join(", ") || "（未配置 council.members / roles.council.councilMembers）"}\n派发：fabric_exec 里 staffs.run({ role, task })；切档位：/staffs preset <名字>；调参：/staffs roles；看板：/staffs board；观测层：/staffs panel <footer|widget|off>；体检：/staffs doctor`,
+            `Pi-Staffs ${PI_STAFFS_VERSION} — ${path}\n档位：${activePresetName(config) || "（无）"}｜可用：${available.join(", ") || "（空）"}\n${lines.join("\n")}\n合议：${council.join(", ") || "（未配置 council.members / roles.council.councilMembers）"}\n派发：fabric_exec 里 staffs.run({ role, task })；切档位：/staffs preset <名字>；调参：/staffs roles；看板：/staffs board；观测层：/staffs panel <footer|widget|off>；体检：/staffs doctor；路由审计：/staffs jev`,
             "info",
          );
          for (const issue of outcome.issues)
@@ -362,7 +375,8 @@ export default function piStaffs(pi: ExtensionAPI): void {
  * 为什么独立成纯函数：宿主对返回值原样显示、不做过滤，这里必须自己按当前输入过滤；
  * 拆出来 + presetNames 注入，冒烟可以直接断言逻辑、不用起 Pi。
  * 语义：第一段补子命令（子序列模糊）；敲到第二段改补该子命令的参数
- * （preset → 档位名、panel → footer/widget/off、skills → sync），无参数子命令给空。
+ * （preset → 档位名、panel → footer/widget/off、skills → sync），无参数子命令
+ * （roles / board / doctor / jev）给空。
  * 为什么按空格分词：命令参数来自输入框，子命令与参数以空格分隔；split 保留尾部
  * 空段，正好区分 preset 与 preset 加空格（后者已进入参数输入）。
  */
@@ -377,6 +391,7 @@ export function buildStaffsArgumentCompletions(
       { value: 'panel', label: 'panel', description: '观测层：footer / widget / off' },
       { value: 'board', label: 'board', description: '看板：进行中的派发与任务' },
       { value: 'doctor', label: 'doctor', description: '配置体检报告' },
+      { value: 'jev', label: 'jev', description: 'Jev 路由日志（只读审计面板）' },
    ];
    const ARGUMENTS: Record<string, AutocompleteItem[]> = {
       preset: presetNames.map((name) => ({ value: name, label: name, description: '模型档位' })),
