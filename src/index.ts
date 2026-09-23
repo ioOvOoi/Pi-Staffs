@@ -73,6 +73,11 @@ const describeRole = (
  */
 export default function piStaffs(pi: ExtensionAPI): void {
    let cache: { config: StaffsConfig; path: string } | undefined;
+
+   /** 缓存更新唯一入口（票 11）：谁写盘谁 remember，散落赋值容易在重构时漏更新导致幽灵配置。 */
+   const rememberConfig = (config: StaffsConfig, path: string): void => {
+      cache = { config, path };
+   };
    let announce:
       | ((message: string, level?: "info" | "warning" | "error") => void)
       | undefined;
@@ -106,7 +111,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
    pi.on("session_start", async (_event, ctx) => {
       announce = (message, level) => ctx.ui.notify(message, level ?? "info");
       const outcome = loadStaffsConfig();
-      cache = { config: outcome.config, path: outcome.path };
+      rememberConfig(outcome.config, outcome.path);
       if (outcome.created) {
          ctx.ui.notify(
             `Pi-Staffs 已生成角色矩阵 ${outcome.path}（${Object.keys(outcome.config.roles).length} 个角色，档位 ${activePresetName(outcome.config) || "无"}）。用 /staffs 查看。`,
@@ -199,7 +204,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
          ),      handler: async (args, ctx) => {
          const requested = String(args ?? "").trim();
          const outcome = loadStaffsConfig();
-         cache = { config: outcome.config, path: outcome.path };
+         rememberConfig(outcome.config, outcome.path);
          const { config, path } = outcome;
          const available = Object.keys(config.presets ?? {});
          /** 交互面板的宿主依赖统一注入：roles 与 preset 两个面板共用同一套读写/提示。 */
@@ -207,7 +212,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
             load: () => loadStaffsConfig(),
             save: (next, at) => {
                writeStaffsConfig(next, at);
-               cache = { config: next, path: at };
+               rememberConfig(next, at);
             },
             aliases: () => readAliases(fabricConfigPath()),
             models: () => {
@@ -262,7 +267,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
             }
             const next: StaffsConfig = { ...config, preset: name };
             writeStaffsConfig(next, path);
-            cache = { config: next, path };
+            rememberConfig(next, path);
             // 与 omo-slim 的差异：它必须 reload（agent 注册表在宿主里），我们的注入每轮读缓存，
             // 所以本会话后续派发即刻生效；正在跑的子 agent 不受影响（它们的角色在派发时已定型）。
             ctx.ui.notify(
@@ -314,7 +319,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
             }
             const next: StaffsConfig = { ...config, panel: mode as PanelMode };
             writeStaffsConfig(next, path);
-            cache = { config: next, path };
+            rememberConfig(next, path);
             ctx.ui.notify(
                `Pi-Staffs 观测层已切到 ${mode}（下一轮生效）`,
                "info",
