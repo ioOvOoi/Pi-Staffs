@@ -2068,6 +2068,24 @@ assert(
 );
 ok("池门面：savePool 原子无残留 / appendRoutingLog 空段跳过+cap 截断 / 坏 JSON 刷新不炸");
 
+
+// 8) 加载器合一（票 08）：fixture 命中返回模块、形状不满足跳过候选回 null。
+const jevFixture = path.join(sandbox, "jev-fixture.mjs");
+writeFileSync(
+   jevFixture,
+   "export const resolveAaKey = async () => ({ key: null });\n" +
+   "export const notFn = 1;\n",
+   "utf-8",
+);
+const hit = await routeMod.loadJevModule({ PI_JEV_ENTRY: jevFixture }, ["resolveAaKey"]);
+assert(hit && typeof hit.resolveAaKey === "function", "loadJevModule 形状命中应返回模块");
+const shapeMiss = await routeMod.loadJevModule(
+   { PI_JEV_ENTRY: jevFixture },
+   ["resolveAaKey", "notFn"],
+);
+assert(shapeMiss === null, "loadJevModule 形状不满足（非 function 字段）应跳过并回 null");
+ok("票08：pi-jev 动态加载器合一，形状断言/缺席回 null");
+
 // 全部段落跑完才清场（票 03 段共用同一 sandbox）。
 rmSync(sandbox, { recursive: true, force: true });
 console.log(`smoke ok（${checks.length} 项）：`);

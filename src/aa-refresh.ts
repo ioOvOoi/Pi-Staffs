@@ -12,7 +12,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { loadJevModule } from "./route.ts";
 import {
    loadPool,
    savePool,
@@ -125,25 +125,15 @@ const loadResolveAaKey = async (
    }>)
    | null
 > => {
-   const candidates = [
-      env.PI_JEV_ENTRY?.trim(),
-      "pi-jev",
-      join(homedir(), ".pi", "selfex", "Pi-Jev", "src", "index.ts"),
-   ].filter((value): value is string => !!value);
-   for (const spec of candidates) {
-      try {
-         const url =
-            spec.includes("/") || spec.includes("\\") ? pathToFileURL(spec).href : spec;
-         const mod = (await import(url)) as { resolveAaKey?: unknown };
-         if (typeof mod.resolveAaKey === "function")
-            return mod.resolveAaKey as () => Promise<
-               { key: string | null; source: string; guidance?: string }
-            >;
-      } catch {
-         // 缺席/加载失败：试下一个候选，最终按无 key 降级
-      }
-   }
-   return null;
+   // 走 route.ts 的 loadJevModule（票 08）：候选表/循环 import 不再复制一份。
+   const mod = await loadJevModule(env, ["resolveAaKey"]);
+   return mod
+      ? (mod.resolveAaKey as () => Promise<{
+           key: string | null;
+           source: string;
+           guidance?: string;
+         }>)
+      : null;
 };
 
 /**

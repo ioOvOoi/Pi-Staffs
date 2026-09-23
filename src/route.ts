@@ -67,36 +67,49 @@ const jevEntryCandidates = (env: NodeJS.ProcessEnv = process.env): string[] =>
       join(homedir(), ".pi", "selfex", "Pi-Jev", "src", "index.ts"),
    ].filter((value): value is string => !!value);
 
-/** 加载 pi-jev 的 runner 工厂；任何一步失败都返回 null（路由整体回落）。 */
-const loadJevRunner = async (
+/**
+ * pi-jev 动态加载器唯一入口（票 08）：候选表 + 循环 import + URL 归一只留这一份，
+ * route（runner 工厂）与 aa-refresh（AA key 解析）都在这里加载，形状各断各的。
+ * need 全部为 function 才算命中；候选全失败返回 null，绝不抛（派发永不阻塞）。
+ */
+export const loadJevModule = async (
    env?: NodeJS.ProcessEnv,
-): Promise<JevRunner | null> => {
+   need: readonly string[] = [],
+): Promise<Record<string, unknown> | null> => {
    for (const spec of jevEntryCandidates(env)) {
       try {
          const url =
             spec.includes("/") || spec.includes("\\")
                ? pathToFileURL(spec).href
                : spec;
-         const mod = (await import(url)) as {
-            makeRunner?: unknown;
-            loadConfig?: unknown;
-            resolveKey?: unknown;
-         };
-         if (
-            typeof mod.makeRunner !== "function" ||
-            typeof mod.loadConfig !== "function" ||
-            typeof mod.resolveKey !== "function"
-         )
-            continue;
-         const cfg = await (mod.loadConfig as () => Promise<unknown>)();
-         return (await (
-            mod.makeRunner as (c: unknown, r: unknown) => Promise<JevRunner>
-         )(cfg, mod.resolveKey)) as JevRunner;
+         const mod = (await import(url)) as Record<string, unknown>;
+         if (need.every((key) => typeof mod[key] === "function")) return mod;
       } catch {
-         // 缺席/加载失败：试下一个候选，最终回落 preset
+         // 缺席/加载失败：试下一个候选
       }
    }
    return null;
+};
+
+/** 加载 pi-jev 的 runner 工厂；任何一步失败都返回 null（路由整体回落）。 */
+const loadJevRunner = async (
+   env?: NodeJS.ProcessEnv,
+): Promise<JevRunner | null> => {
+   const mod = await loadJevModule(env, [
+      "makeRunner",
+      "loadConfig",
+      "resolveKey",
+   ]);
+   if (!mod) return null;
+   try {
+      const cfg = await (mod.loadConfig as () => Promise<unknown>)();
+      return (await (
+         mod.makeRunner as (c: unknown, r: unknown) => Promise<JevRunner>
+      )(cfg, mod.resolveKey)) as JevRunner;
+   } catch {
+      // 工厂构建失败等同缺席：回落 preset
+      return null;
+   }
 };
 
 /** 硬超时包装：到点返回 null，调用方据此全线回落。 */
