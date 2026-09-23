@@ -132,7 +132,8 @@ export default function piStaffs(pi: ExtensionAPI): void {
       // 票 03：派发前先让 Jev 按角色答三问，从模型池选出 (model, thinking) 覆盖档位；
       // 任何失败路径 resolveRouteMap 都返回空表，档位矩阵原样生效（派发永不阻塞）。
       const routes = await resolveRouteMap(config, readAliases(fabricConfigPath()), {
-         taskContext: String(event.input.code ?? "").slice(0, 1500),
+         // 截断只在 route.ts（CONTEXT_CHARS）做一次（票 09）：这里再截一道是重复魔法数。
+         taskContext: String(event.input.code ?? ""),
       });
       event.input.prelude = buildStaffsPrelude({
          config,
