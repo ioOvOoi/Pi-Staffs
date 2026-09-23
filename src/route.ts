@@ -19,7 +19,6 @@ import {
    appendRoutingLog,
    loadPool,
    matchPool,
-   type PoolFile,
    type RoutingLogEntry,
    type TaskProfile,
 } from "./pool.ts";
@@ -29,6 +28,23 @@ export { ROUTING_LOG_CAP } from "./pool.ts";
 export const ROUTE_TIMEOUT_MS = 3000;
 /** 喂给 Jev 的任务上下文上限：三问只要粗粒度判断，截断省 token 与时延。 */
 const CONTEXT_CHARS = 800;
+
+/**
+ * 判答失败负缓存（票 13）：Jev 缺席/退化时每个 tool_call 都白试一遍是纯浪费——
+ * 失败后 TTL 内直接回落 preset，TTL 过后自动重试（服务可能已恢复）。
+ * 全局粒度（ponytail：按角色细分无收益，Jev 是整体缺席/退化）。
+ */
+let routeCooldownUntil = 0;
+const ROUTE_COOLDOWN_MS = 60_000;
+const routeCooldownMs = (env?: NodeJS.ProcessEnv): number => {
+   const raw = env?.PI_STAFFS_ROUTE_COOLDOWN_MS;
+   const n = raw === undefined ? NaN : Number(raw);
+   return Number.isFinite(n) && n >= 0 ? n : ROUTE_COOLDOWN_MS;
+};
+/** 测试/smoke 段间隔离钩子：清空负缓存状态（生产路径永不调用）。 */
+export const resetRouteCooldown = (): void => {
+   routeCooldownUntil = 0;
+};
 
 export type RouteDecision = { model: string; thinking?: string };
 export type RouteMap = Record<string, RouteDecision>;
@@ -53,7 +69,7 @@ export type RouteDeps = {
    env?: NodeJS.ProcessEnv;
    now?: () => number;
    /** 桩注入点：smoke 用它截获日志，不落盘。 */
-   writeLog?: (pool: PoolFile, entries: RoutingLogEntry[]) => void;
+   writeLog?: (entries: RoutingLogEntry[]) => void;
 };
 
 /**
@@ -213,17 +229,18 @@ const buildQuestions = (
 
 /** 路由日志落盘（环形截断）；写失败静默吞掉——回落也绝不阻塞派发。 */
 const persistLog = (
-   outcome: { pool: PoolFile; path: string },
+   path: string,
    entries: RoutingLogEntry[],
    deps: RouteDeps,
 ): void => {
    if (entries.length === 0) return;
    if (deps.writeLog) {
-      deps.writeLog(outcome.pool, entries);
+      deps.writeLog(entries);
       return;
    }
    try {
-      appendRoutingLog(outcome.path, outcome.pool, entries);
+      // 只传 path 不传预读快照（票 13）：此刻快照可能已过期，函数内重读才不丢并发账。
+      appendRoutingLog(path, entries);
    } catch {
       // 日志写失败不影响派发
    }
@@ -244,14 +261,17 @@ export const resolveRouteMap = async (
       .filter(([, role]) => role.enabled !== false)
       .map(([name]) => name);
    if (roles.length === 0) return {};
+   // 负缓存内早退：静默回落不留账——否则 60s 内每个 tool_call 都会把环形日志刷爆。
+   if (now() < routeCooldownUntil) return {};
 
    const runner = deps.runner !== undefined ? deps.runner : await loadJevRunner(deps.env);
    const outcome = loadPool({ path: deps.poolPath, env: deps.env });
    const at = new Date(now()).toISOString();
    /** 判答整体失败（缺席/超时/throw/无效）也要逐角色留账，否则账本出现静默黑洞。 */
    const recordFallback = (reason: string): RouteMap => {
+      routeCooldownUntil = now() + routeCooldownMs(deps.env);
       persistLog(
-         outcome,
+         outcome.path,
          roles.map((name) => ({
             at,
             role: name,
@@ -326,6 +346,8 @@ export const resolveRouteMap = async (
          fallback: false,
       });
    }
-   persistLog(outcome, entries, deps);
+   // 只要真路由到过模型就清负缓存：Jev 工作正常（全回落可能是池/匹配问题，不该挡）。
+   if (Object.keys(map).length > 0) routeCooldownUntil = 0;
+   persistLog(outcome.path, entries, deps);
    return map;
 };

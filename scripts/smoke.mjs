@@ -1780,6 +1780,8 @@ writeFileSync(
 );
 
 // 1) pi-jev 缺席（入口指向不存在的文件）→ 空表，档位矩阵原样生效。
+// 负缓存（票 13）是模块级状态，跨段会串：每段调用前统一重置。
+routeMod.resetRouteCooldown();
 const noJev = await routeMod.resolveRouteMap(routeConfig, {}, {
    deps: { env: { PI_JEV_ENTRY: path.join(sandbox, "no-such-jev-entry.ts") }, poolPath: routePoolPath, now: () => 0 },
 });
@@ -1798,8 +1800,9 @@ const stubRunner = async ({ questions }) => ({
    ),
 });
 const captured = [];
+routeMod.resetRouteCooldown();
 const routedMap = await routeMod.resolveRouteMap(routeConfig, {}, {
-   deps: { runner: stubRunner, poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => captured.push(...entries) },
+   deps: { runner: stubRunner, poolPath: routePoolPath, now: () => 0, writeLog: (entries) => captured.push(...entries) },
 });
 assert(routedMap.fixer?.model === "p/strong", "难度4+coding 应命中 p/strong");
 assert(routedMap.fixer?.thinking === "high", "choice=high 应覆盖 thinking");
@@ -1811,8 +1814,9 @@ const lowConfRunner = async ({ questions }) => ({
    answers: Object.fromEntries(Object.keys(questions).map((id) => [id, { score: 4, _lowConfidence: true }])),
 });
 const fallbackLog = [];
+routeMod.resetRouteCooldown();
 const lowConf = await routeMod.resolveRouteMap(routeConfig, {}, {
-   deps: { runner: lowConfRunner, poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => fallbackLog.push(...entries) },
+   deps: { runner: lowConfRunner, poolPath: routePoolPath, now: () => 0, writeLog: (entries) => fallbackLog.push(...entries) },
 });
 assert(Object.keys(lowConf).length === 0, "低置信判答应整体回落");
 assert(
@@ -1823,8 +1827,9 @@ ok("路由：Jev 低置信逐角色回落并留证");
 
 // 3b) 判答整体失败（error/throw）也要逐角色留账，理由可读（票12）。
 const failLog = [];
+routeMod.resetRouteCooldown();
 const failRoute = await routeMod.resolveRouteMap(routeConfig, {}, {
-   deps: { runner: async () => ({ error: "jev-down" }), poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => failLog.push(...entries) },
+   deps: { runner: async () => ({ error: "jev-down" }), poolPath: routePoolPath, now: () => 0, writeLog: (entries) => failLog.push(...entries) },
 });
 assert(Object.keys(failRoute).length === 0, "判答失败应整体回落");
 assert(
@@ -1832,8 +1837,9 @@ assert(
    "error 应逐角色记账且带 reason code",
 );
 const throwLog = [];
+routeMod.resetRouteCooldown();
 const throwRoute = await routeMod.resolveRouteMap(routeConfig, {}, {
-   deps: { runner: async () => { throw new Error("boom"); }, poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => throwLog.push(...entries) },
+   deps: { runner: async () => { throw new Error("boom"); }, poolPath: routePoolPath, now: () => 0, writeLog: (entries) => throwLog.push(...entries) },
 });
 assert(Object.keys(throwRoute).length === 0, "runner throw 应整体回落");
 assert(
@@ -1853,6 +1859,7 @@ ok("路由：日志可截获审计，字段完整");
 
 // 5) Jev 卡死 → 硬超时回落（PI_STAFFS_ROUTE_TIMEOUT 压到 50ms）。
 const t0 = Date.now();
+routeMod.resetRouteCooldown();
 const hung = await routeMod.resolveRouteMap(routeConfig, {}, {
    deps: { runner: () => new Promise(() => {}), env: { PI_STAFFS_ROUTE_TIMEOUT: "50" }, poolPath: routePoolPath, now: () => 0 },
 });
@@ -2063,10 +2070,10 @@ const facadePool = poolMod.normalizePool({ entries: [localPool.entries[0]] }).po
 poolMod.savePool(facadePath, facadePool);
 assert(
    JSON.parse(readFileSync(facadePath, "utf-8")).entries.length === 1 &&
-      !existsSync(`${facadePath}.tmp`),
-   "savePool 落盘内容正确且无 tmp 残留",
+      JSON.parse(readFileSync(facadePath, "utf-8")).version === 1,
+   "savePool 落盘内容正确且打上 version:1",
 );
-poolMod.appendRoutingLog(facadePath, facadePool, []);
+poolMod.appendRoutingLog(facadePath, []);
 assert(
    !JSON.parse(readFileSync(facadePath, "utf-8")).routingLog?.length,
    "appendRoutingLog 空 entries 不应改动文件",
@@ -2075,7 +2082,7 @@ const filler = Array.from({ length: 55 }, (_, i) => ({
    at: new Date(i).toISOString(), role: "fixer", profile: `p${i}`,
    selected: "m/x", fallback: false,
 }));
-poolMod.appendRoutingLog(facadePath, facadePool, filler);
+poolMod.appendRoutingLog(facadePath, filler);
 const capped = JSON.parse(readFileSync(facadePath, "utf-8")).routingLog;
 assert(capped.length === poolMod.ROUTING_LOG_CAP && capped[0].profile === "p5", "appendRoutingLog 应环形截断到上限");
 writeFileSync(path.join(sandbox, "broken-pool.json"), "{oops", "utf-8");
@@ -2087,7 +2094,31 @@ assert(
    brokenSkip.skipped === true && /不可加载|key/.test(brokenSkip.reason ?? ""),
    `坏 JSON 池文件不应炸掉刷新（回空池走 skip）：${JSON.stringify(brokenSkip).slice(0, 120)}`,
 );
-ok("池门面：savePool 原子无残留 / appendRoutingLog 空段跳过+cap 截断 / 坏 JSON 刷新不炸");
+assert(
+   !readdirSync(sandbox).some((f) => f.endsWith(".tmp") || f.endsWith(".lock")),
+   "落盘完成后不应残留 tmp/lock 文件",
+);
+ok("池门面：savePool 原子无残留+version / appendRoutingLog 空段跳过+cap 截断 / 坏 JSON 刷新不炸");
+
+// 7b) 路由负缓存（票 13）：判答失败进入冷却，冷却内直接回落不再发起判答；
+//     env 可覆盖 TTL；resetRouteCooldown 重置。用真实 Date.now，两次调用间隔必然远小于 TTL。
+{
+   let calls = 0;
+   const failRunner = async () => {
+      calls += 1;
+      throw new Error("cd");
+   };
+   const mkDeps = (env) => ({ runner: failRunner, poolPath: routePoolPath, env, writeLog: () => {} });
+   await routeMod.resolveRouteMap(routeConfig, {}, { deps: mkDeps({ PI_STAFFS_ROUTE_COOLDOWN_MS: "5000" }) });
+   await routeMod.resolveRouteMap(routeConfig, {}, { deps: mkDeps({ PI_STAFFS_ROUTE_COOLDOWN_MS: "5000" }) });
+   assert(calls === 1, `冷却内第二次调用不应重复判答（实际 ${calls} 次）`);
+   await routeMod.resolveRouteMap(routeConfig, {}, { deps: mkDeps(undefined) });
+   assert(calls === 1, "env 冷却只对该 env 生效，默认路径不应被波及");
+   routeMod.resetRouteCooldown();
+   await routeMod.resolveRouteMap(routeConfig, {}, { deps: mkDeps({ PI_STAFFS_ROUTE_COOLDOWN_MS: "5000" }) });
+   assert(calls === 2, "reset 后应重新发起判答");
+   ok("路由负缓存：失败进冷却/冷却内早退/env 可覆盖/reset 清除");
+}
 
 
 // 8) 加载器合一（票 08）：fixture 命中返回模块、形状不满足跳过候选回 null。

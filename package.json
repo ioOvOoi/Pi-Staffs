@@ -9,7 +9,8 @@
     "prompts/",
     "skills/",
     "scripts/",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "pi-package",
