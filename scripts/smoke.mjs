@@ -2086,6 +2086,39 @@ const shapeMiss = await routeMod.loadJevModule(
 assert(shapeMiss === null, "loadJevModule 形状不满足（非 function 字段）应跳过并回 null");
 ok("票08：pi-jev 动态加载器合一，形状断言/缺席回 null");
 
+
+// 9) 路由内核出模（票 10）：routing.js 可独立 import（语法错误早炸），
+//    注入桩执行 __staffsResolveRole，路由/逃生门/未知角色语义不回归。
+await import(pathToFileURL(path.join(repo, "src", "guest", "routing.js")).href);
+const routingSrc = readFileSync(path.join(repo, "src", "guest", "routing.js"), "utf8");
+const makeResolve = () =>
+   new Function(
+      "deps",
+      routingSrc + "\nreturn __staffsMakeResolver(deps);",
+   )(
+      {
+            roles: { fixer: { instructions: "I", thinking: "high", tools: ["pi_bash"] } },
+            permissions: {},
+            routes: { fixer: { model: "m/routed", thinking: "low" } },
+            dispatch: { primaryRole: "fixer" },
+            combine: (i, t) => (i ?? "") + "::" + t,
+      },
+   );
+const routedHit = makeResolve()({ task: "T" });
+assert(
+   routedHit.routed?.model === "m/routed" && routedHit.request.thinking === "low",
+   "出模后路由命中仍覆盖 (model, thinking)",
+);
+const escape = makeResolve()({ task: "T", route: false });
+assert(
+   escape.routed === undefined && escape.request.thinking === "high",
+   "出模后 route:false 逃生门仍回档位矩阵",
+);
+let threw = false;
+try { makeResolve()({ role: "nope", task: "T" }); } catch { threw = true; }
+assert(threw, "出模后未知角色仍抛错");
+ok("票10：路由内核出模 routing.js，独立加载+注入执行语义不回归");
+
 // 全部段落跑完才清场（票 03 段共用同一 sandbox）。
 rmSync(sandbox, { recursive: true, force: true });
 console.log(`smoke ok（${checks.length} 项）：`);
