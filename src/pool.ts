@@ -79,7 +79,7 @@ export type MatchResult = { model: string; thinking: ThinkingLevel };
  */
 export const DIFFICULTY_THRESHOLDS = [0, 20, 40, 60, 80];
 
-const defaultPoolFilePath = (env: NodeJS.ProcessEnv = process.env): string =>
+export const defaultPoolFilePath = (env: NodeJS.ProcessEnv = process.env): string =>
    env.PI_STAFFS_POOL?.trim() || join(homedir(), ".pi", "agent", "model-pool.json");
 
 /** 合法思考档集合，防御非法输入。 */
