@@ -1821,6 +1821,27 @@ assert(
 );
 ok("路由：Jev 低置信逐角色回落并留证");
 
+// 3b) 判答整体失败（error/throw）也要逐角色留账，理由可读（票12）。
+const failLog = [];
+const failRoute = await routeMod.resolveRouteMap(routeConfig, {}, {
+   deps: { runner: async () => ({ error: "jev-down" }), poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => failLog.push(...entries) },
+});
+assert(Object.keys(failRoute).length === 0, "判答失败应整体回落");
+assert(
+   failLog.length === 2 && failLog.every((e) => e.fallback === true && /判答失败（jev-down）/.test(e.profile)),
+   "error 应逐角色记账且带 reason code",
+);
+const throwLog = [];
+const throwRoute = await routeMod.resolveRouteMap(routeConfig, {}, {
+   deps: { runner: async () => { throw new Error("boom"); }, poolPath: routePoolPath, now: () => 0, writeLog: (pool, entries) => throwLog.push(...entries) },
+});
+assert(Object.keys(throwRoute).length === 0, "runner throw 应整体回落");
+assert(
+   throwLog.length === 2 && throwLog.every((e) => e.fallback === true && /判答失败（throw:boom）/.test(e.profile)),
+   "throw 应逐角色记账且带 message",
+);
+ok("路由：判答失败/throw 逐角色留账，理由可读");
+
 // 4) 路由日志字段完整 + 环形截断上限常量存在。
 assert(
    captured.every((e) => typeof e.at === "string" && typeof e.role === "string" && typeof e.selected === "string"),

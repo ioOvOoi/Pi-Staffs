@@ -164,6 +164,16 @@ const profileOf = (
    };
 };
 
+/** 哪些问打了低置信（票12）：fallback 账本要能回答「为什么回落」。 */
+const lowConfidenceKeys = (
+   answers: Record<string, unknown>,
+   role: string,
+): string[] =>
+   (["difficulty", "domain", "thinking"] as const).filter(
+      (key) =>
+         (answers[`${role}#${key}`] as JevAnswer | undefined)?._lowConfidence === true,
+   );
+
 /** 三问的统一问法：按角色前缀批量发，一次 Jev 往返出全部角色的画像。 */
 const buildQuestions = (
    roles: readonly string[],
@@ -236,33 +246,59 @@ export const resolveRouteMap = async (
    if (roles.length === 0) return {};
 
    const runner = deps.runner !== undefined ? deps.runner : await loadJevRunner(deps.env);
-   if (!runner) return {};
+   const outcome = loadPool({ path: deps.poolPath, env: deps.env });
+   const at = new Date(now()).toISOString();
+   /** 判答整体失败（缺席/超时/throw/无效）也要逐角色留账，否则账本出现静默黑洞。 */
+   const recordFallback = (reason: string): RouteMap => {
+      persistLog(
+         outcome,
+         roles.map((name) => ({
+            at,
+            role: name,
+            profile: `Jev 判答失败（${reason}）`,
+            selected: "(回落 preset)",
+            fallback: true,
+         })),
+         deps,
+      );
+      return {};
+   };
+   if (!runner) return recordFallback("jev 工具缺席");
 
    const state = {
       roles,
       taskContext: String(options.taskContext ?? "").slice(0, CONTEXT_CHARS),
    };
-   const reply = await withTimeout(
-      runner({ state, questions: buildQuestions(roles) }),
-      deps.env?.PI_STAFFS_ROUTE_TIMEOUT
-         ? Number(deps.env.PI_STAFFS_ROUTE_TIMEOUT) || ROUTE_TIMEOUT_MS
-         : ROUTE_TIMEOUT_MS,
-   );
+   let reply: Awaited<ReturnType<typeof runner>> | null;
+   try {
+      reply = await withTimeout(
+         runner({ state, questions: buildQuestions(roles) }),
+         deps.env?.PI_STAFFS_ROUTE_TIMEOUT
+            ? Number(deps.env.PI_STAFFS_ROUTE_TIMEOUT) || ROUTE_TIMEOUT_MS
+            : ROUTE_TIMEOUT_MS,
+      );
+   } catch (error) {
+      return recordFallback(
+         "throw:" + String((error as Error)?.message ?? error).slice(0, 80),
+      );
+   }
    const answers =
       reply && !reply.error && reply.answers ? reply.answers : undefined;
-   if (!answers) return {};
+   if (!answers) {
+      const code = reply && reply.error ? reply.error : reply ? "无效返回" : "超时";
+      return recordFallback(code);
+   }
 
-   const outcome = loadPool({ path: deps.poolPath, env: deps.env });
-   const at = new Date(now()).toISOString();
    const map: RouteMap = {};
    const entries: RoutingLogEntry[] = [];
    for (const name of roles) {
       const profile = profileOf(answers, name);
       if (!profile) {
+         const lowKeys = lowConfidenceKeys(answers, name);
          entries.push({
             at,
             role: name,
-            profile: "Jev 低置信/无效判答",
+            profile: `Jev 判答未过线（${lowKeys.length > 0 ? "低置信:" + lowKeys.join(",") : "答案缺失"}）`,
             selected: "(回落 preset)",
             fallback: true,
          });
