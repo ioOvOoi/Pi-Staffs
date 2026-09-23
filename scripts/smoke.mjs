@@ -2034,6 +2034,40 @@ assert(
 );
 ok("AA 刷新：成功写回/当日幂等/无 key 降级/网络失败不崩（四路径）");
 
+
+// 7) 池门面（票 07）：savePool 原子写无残留、appendRoutingLog 空段不动文件 + cap 截断、
+//    坏 JSON 走 loadPool 回空池后刷新静默 skip（原先裸 parse 直接炸）。
+const facadePath = path.join(sandbox, "facade-pool.json");
+const facadePool = poolMod.normalizePool({ entries: [localPool.entries[0]] }).pool;
+poolMod.savePool(facadePath, facadePool);
+assert(
+   JSON.parse(readFileSync(facadePath, "utf-8")).entries.length === 1 &&
+      !existsSync(`${facadePath}.tmp`),
+   "savePool 落盘内容正确且无 tmp 残留",
+);
+poolMod.appendRoutingLog(facadePath, facadePool, []);
+assert(
+   !JSON.parse(readFileSync(facadePath, "utf-8")).routingLog?.length,
+   "appendRoutingLog 空 entries 不应改动文件",
+);
+const filler = Array.from({ length: 55 }, (_, i) => ({
+   at: new Date(i).toISOString(), role: "fixer", profile: `p${i}`,
+   selected: "m/x", fallback: false,
+}));
+poolMod.appendRoutingLog(facadePath, facadePool, filler);
+const capped = JSON.parse(readFileSync(facadePath, "utf-8")).routingLog;
+assert(capped.length === poolMod.ROUTING_LOG_CAP && capped[0].profile === "p5", "appendRoutingLog 应环形截断到上限");
+writeFileSync(path.join(sandbox, "broken-pool.json"), "{oops", "utf-8");
+const brokenSkip = await aa.refreshPoolAa({
+   deps: { poolPath: path.join(sandbox, "broken-pool.json"), resolveAaKeyImpl: null },
+   env: {},
+});
+assert(
+   brokenSkip.skipped === true && /不可加载|key/.test(brokenSkip.reason ?? ""),
+   `坏 JSON 池文件不应炸掉刷新（回空池走 skip）：${JSON.stringify(brokenSkip).slice(0, 120)}`,
+);
+ok("池门面：savePool 原子无残留 / appendRoutingLog 空段跳过+cap 截断 / 坏 JSON 刷新不炸");
+
 // 全部段落跑完才清场（票 03 段共用同一 sandbox）。
 rmSync(sandbox, { recursive: true, force: true });
 console.log(`smoke ok（${checks.length} 项）：`);

@@ -11,12 +11,12 @@
  * 失败全部回落（规格：派发永不阻塞）：pi-jev 缺席 / key 缺失 / Jev 低置信 /
  * 池空 / 超时 → 该角色不进路由表，档位矩阵原样生效。
  */
-import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveModelRef, type StaffsConfig } from "./config.ts";
 import {
+   appendRoutingLog,
    loadPool,
    matchPool,
    type PoolFile,
@@ -24,8 +24,7 @@ import {
    type TaskProfile,
 } from "./pool.ts";
 
-/** 路由日志环形上限：只留最近判断（面板审计滚动看，不无限膨胀池文件）。 */
-export const ROUTING_LOG_CAP = 50;
+export { ROUTING_LOG_CAP } from "./pool.ts";
 /** Jev 整体硬超时：超过全线回落。派发自身的重试地板是 15s，路由久等无意义。 */
 export const ROUTE_TIMEOUT_MS = 3000;
 /** 喂给 Jev 的任务上下文上限：三问只要粗粒度判断，截断省 token 与时延。 */
@@ -201,13 +200,7 @@ const persistLog = (
       return;
    }
    try {
-      const routingLog = [...outcome.pool.routingLog, ...entries].slice(
-         -ROUTING_LOG_CAP,
-      );
-      writeFileSync(
-         outcome.path,
-         JSON.stringify({ ...outcome.pool, routingLog }, null, 2) + "\n",
-      );
+      appendRoutingLog(outcome.path, outcome.pool, entries);
    } catch {
       // 日志写失败不影响派发
    }

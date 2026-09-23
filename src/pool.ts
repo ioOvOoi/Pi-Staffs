@@ -8,7 +8,7 @@
  * 匹配器被特意写成不吃环境、不碰网络的纯函数：三问 + 池进，{model, thinking} | null 出。
  * 派发路径上的回落决策（null → 用 preset）属于票 03，这里不越界。
  */
-import { existsSync } from "node:fs";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { THINKING_LEVELS, readJson, type ThinkingLevel } from "./config.ts";
@@ -287,4 +287,31 @@ export const loadPool = (
    }
    const { pool, issues } = normalizePool(raw);
    return { pool, issues, path };
+};
+
+/** 路由日志环形上限：只留最近判断（面板审计滚动看，不无限膨胀池文件）。 */
+export const ROUTING_LOG_CAP = 50;
+
+/**
+ * 原子写池文件（tmp + rename，学 state.ts）；目录不存在先建。
+ * 唯一落盘通道：session_start 的 AA 快照刷新与每次 tool_call 的日志落盘
+ * 并发时，非原子全量重写会互相覆盖丢数据，所以调用方一律走这里。
+ */
+export const savePool = (path: string, pool: PoolFile): void => {
+   const tmp = `${path}.tmp`;
+   writeFileSync(tmp, JSON.stringify(pool, null, 2) + "\n", "utf-8");
+   renameSync(tmp, path);
+};
+
+/** 原子追加路由日志（环形 cap）；entries 为空时不动文件。 */
+export const appendRoutingLog = (
+   path: string,
+   pool: PoolFile,
+   entries: RoutingLogEntry[],
+): void => {
+   if (entries.length === 0) return;
+   savePool(path, {
+      ...pool,
+      routingLog: [...pool.routingLog, ...entries].slice(-ROUTING_LOG_CAP),
+   });
 };

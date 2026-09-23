@@ -10,12 +10,12 @@
  * 失败全降级（规格：不影响会话启动）：无 key 静默跳过 / 网络失败返回 error 不崩 /
  * 未收录条目原样保留 manualTier 兜底。
  */
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-   normalizePool,
+   loadPool,
+   savePool,
    type PoolEntry,
    type PoolFile,
 } from "./pool.ts";
@@ -111,13 +111,6 @@ export const isRefreshedToday = (
       (entry?.aa?.refreshedAt ?? "").startsWith(today),
    );
 
-/** 原子写池文件（临时文件 + rename，学 state.ts）；目录不存在先建。 */
-const savePool = (path: string, pool: PoolFile): void => {
-   const tmp = `${path}.tmp`;
-   writeFileSync(tmp, JSON.stringify(pool, null, 2) + "\n", "utf-8");
-   renameSync(tmp, path);
-};
-
 /**
  * 加载 pi-jev 的 resolveAaKey（凭据库>env>missing+指引）：复用 route.ts 的
  * 候选通道（env PI_JEV_ENTRY → 包名 → 本机 checkout），auth.ts 与 index.ts 同目录。
@@ -204,9 +197,8 @@ export const refreshPoolAa = async (
       env.PI_STAFFS_POOL?.trim() ??
       join(homedir(), ".pi", "agent", "model-pool.json");
 
-   const pool = existsSync(poolPath)
-      ? normalizePool(JSON.parse(readFileSync(poolPath, "utf-8"))).pool
-      : { entries: [], routingLog: [] };
+   // 走 loadPool 门面：缺失回空池、坏 JSON 不抛（原先裸 parse 会炸掉刷新）。
+   const pool = loadPool({ path: poolPath }).pool;
    if (isRefreshedToday(pool, today))
       return { updated: 0, path: poolPath } as RefreshResult;
 
