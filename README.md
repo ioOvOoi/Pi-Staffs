@@ -37,6 +37,7 @@ git submodule add https://github.com/ioOvOoi/Pi-Staffs.git selfex/Pi-Staffs
 /staffs skills             # 看随包技能
 /staffs board              # 看板
 /staffs doctor             # 体检（模型能否解析、引擎白名单、看板计数）
+/staffs jev                # Jev 路由日志（只读审计：最近判断 + 回落标记）
 ```
 
 ## 角色矩阵（基线）
@@ -84,7 +85,11 @@ await staffs.council({ task: "…" });   // 多模型合议（先 staffs.preflig
 
 ## 工具与命令
 
-命令：`/staffs`（角色 / 档位 / 技能 / board / doctor）。
+命令：`/staffs`（角色 / 档位 / 技能 / board / doctor / jev）。
+
+- `/staffs jev`：只读审计 Jev 路由日志——跨包读共享池文件的 `routingLog` 段（票 03 由路由层落盘），
+  最近判断逐条展示（时间/角色/三问摘要/选定模型），回落到 preset 的判断带 ⚠ 标记；池文件缺/空/坏时
+  该段显示「暂无路由记录」，面板其余部分照常渲染，绝不写池文件。
 
 工具：`staffs_board`、`staffs_goal`、`staffs_task`、`staffs_mail`、`staffs_ticket`、`staffs_record`、`staffs_ask`、`staffs_webfetch`、`staffs_worktree`、`staffs_interview`、`staffs_doctor`、`staffs_astgrep`、`staffs_acp`、`staffs_review`。
 

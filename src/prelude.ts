@@ -26,15 +26,24 @@ import {
    type CouncilConfig,
    type StaffsConfig,
 } from "./config.ts";
+import type { RouteDecision } from "./route.ts";
 import { checkRolePermissions, readPermissions } from "./permissions.ts";
 
 const kernelPath = fileURLToPath(new URL("./guest/kernel.js", import.meta.url));
+const routingPath = fileURLToPath(new URL("./guest/routing.js", import.meta.url));
 let cachedKernel: string | undefined;
+let cachedRouting: string | undefined;
 
 /** guest 内核源码（懒读 + 缓存；注入是每轮 fabric_exec 都要做的热路径）。 */
 export const guestKernelSource = (): string => {
    cachedKernel ??= readFileSync(kernelPath, "utf8");
    return cachedKernel;
+};
+
+/** 路由内核源码（票 10，同款懒读；依赖 kernel.js 的 __staffsCombine，注入顺序在其后）。 */
+export const guestRoutingSource = (): string => {
+   cachedRouting ??= readFileSync(routingPath, "utf8");
+   return cachedRouting;
 };
 
 export const promptsDirectory = (): string =>
@@ -50,8 +59,10 @@ export const readRolePrompt = (role: string): string | undefined => {
 
 export type PreludeOptions = {
    config: StaffsConfig;
+   routes?: Record<string, RouteDecision>;
    aliases?: Record<string, string>;
    kernel?: string;
+   routing?: string;
    promptFallback?: (role: string) => string | undefined;
 };
 
@@ -78,6 +89,7 @@ export const COUNCIL_SYNTH_INSTRUCTIONS = [
 
 export const buildStaffsPrelude = (options: PreludeOptions): string => {
    const { config } = options;
+   const routes = options.routes ?? {};
    const aliases = options.aliases ?? readAliases();
    const instructions = effectiveRoleInstructions(
       config,
@@ -143,49 +155,27 @@ export const buildStaffsPrelude = (options: PreludeOptions): string => {
 const __staffsPreset = ${JSON.stringify(preset)};
 const __staffsRoles = ${JSON.stringify(roles)};
 const __staffsModels = ${JSON.stringify(models)};
+const __staffsRoutes = ${JSON.stringify(routes)};
 const __staffsDispatch = ${JSON.stringify(dispatch)};
 const __staffsPolicyConfig = ${JSON.stringify(policy)};
 const __staffsCouncilConfig = ${JSON.stringify(council)};
 const __staffsPermissions = ${JSON.stringify(permissions)};
 ${options.kernel ?? guestKernelSource()}
-const __staffsCovers = (list, tool) => Array.isArray(list) && (list.indexOf(tool) >= 0 || list.indexOf("*") >= 0);
-const __staffsResolveRole = (request) => {
-   const input = request && typeof request === "object" ? request : {};
-   const name = typeof input.role === "string" && input.role.trim() ? input.role.trim() : __staffsDispatch.primaryRole;
-   const role = __staffsRoles[name];
-   if (!role) throw new Error("Unknown Pi-Staffs role: " + String(name) + "（可用：" + Object.keys(__staffsRoles).join(", ") + "）");
-   if (role.enabled === false) throw new Error("Pi-Staffs 角色 " + name + " 已停用（enabled: false）");
-   const perms = __staffsPermissions[name] || {};
-   if (perms.allowed === false)
-      throw new Error("Pi-Staffs 拒绝派发角色 " + name + "：" + (perms.reason || "权限矩阵未放行"));
-   const { role: __role, instructions, task, ...rest } = input;
-   if (typeof task !== "string" || !task.trim()) throw new Error("Pi-Staffs 派发需要非空 task");
-   const requested = Array.isArray(rest.tools) ? rest.tools : [];
-   const declared = Array.isArray(role.tools) ? role.tools : [];
-   const banned = requested.filter((tool) => __staffsCovers(perms.deny, tool));
-   const outside = requested.filter(
-      (tool) =>
-         !__staffsCovers(declared, tool) &&
-         !__staffsCovers(perms.allow, tool) &&
-         !banned.includes(tool),
-   );
-   if (banned.length) throw new Error("Pi-Staffs 角色 " + name + " 被禁止使用工具：" + banned.join(", "));
-   if (outside.length)
-      throw new Error("Pi-Staffs 角色 " + name + " 的 tools 白名单不含：" + outside.join(", "));
-   return {
-      name,
-      role,
-      request: { ...rest, thinking: role.thinking, tools: role.tools, ...(role.timeoutMs ? { timeoutMs: role.timeoutMs } : {}) },
-      task: __staffsCombine(instructions !== undefined ? instructions : role.instructions, task),
-   };
-};
+${options.routing ?? guestRoutingSource()}
+const __staffsResolveRole = __staffsMakeResolver({
+   roles: __staffsRoles,
+   permissions: __staffsPermissions,
+   routes: __staffsRoutes,
+   dispatch: __staffsDispatch,
+   combine: __staffsCombine,
+});
 const __staffsDispatchRun = (request, spawn) => {
    // 校验同步做（坏角色/越权工具立刻抛），只有真正的派发是异步的：
    // 调用点因此能用 try/catch 区分「参数错」与「上游拒绝」，冒烟测试也钉住了这个语义。
    const resolved = __staffsResolveRole(request);
    return __staffsRun({
       host: __staffsHost(),
-      model: __staffsModels[resolved.name] || "",
+      model: resolved.routed?.model || __staffsModels[resolved.name] || "",
       task: resolved.task,
       request: resolved.request,
       policy: __staffsPolicyConfig,
@@ -194,6 +184,7 @@ const __staffsDispatchRun = (request, spawn) => {
    }).then((receipt) => ({
       ...receipt,
       role: resolved.name,
+      route: resolved.routed || null,
       attempts: (receipt.attempts || []).map((attempt) => ({
          ...attempt,
          role: resolved.name,
@@ -222,7 +213,7 @@ const staffs = {
             "Unknown Pi-Staffs role: " + unknown[0] +
                "（可用：" + Object.keys(__staffsRoles).join(", ") + "）",
          );
-      return __staffsPreflight(__staffsHost(), __staffsModels, roles);
+      return __staffsPreflight(__staffsHost(), { ...__staffsModels, ...Object.fromEntries(Object.entries(__staffsRoutes).map(([k, v]) => [k, v.model])) }, roles);
    },
    preflightCouncil: () => {
       const map = {};

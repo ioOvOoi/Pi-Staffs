@@ -17,11 +17,15 @@ import {
    type StaffsConfig,
 } from "./config.ts";
 import { buildStaffsPrelude, readRolePrompt } from "./prelude.ts";
+import { refreshPoolAa } from "./aa-refresh.ts";
+import { resolveRouteMap } from "./route.ts";
 import { extractReceipts, recordReceipts } from "./attempts.ts";
 import { buildTurnInjection, registerStaffsHooks } from "./hooks.ts";
-import { formatDoctorReport, registerStaffsTools } from "./tools.ts";
+import { formatDoctorReport } from "./doctor.ts";
+import { registerStaffsTools } from "./tools.ts";
 import { listStaffsSkills, syncStaffsSkills } from "./skills.ts";
 import { openPresetSwitcher, openRolesPanel, type RolesPanelIO } from "./roles-panel.ts";
+import { loadJevPanelData, openJevPanel, type JevPanelIO } from "./jev-panel.ts";
 import type { AutocompleteItem, SelectItem } from "@earendil-works/pi-tui";
 import {
    footerSummary,
@@ -43,6 +47,7 @@ const DISPATCH_GUIDANCE = [
    "团队协作：staffs_board 看看板、staffs_goal 记目标与验收标准、staffs_task 管 DAG、staffs_mail 传话、staffs_ticket 收发 tracker 票。",
    "不要在派发点传 model / thinking / tools——模型由当前档位（preset）决定，thinking 与 tools 由角色矩阵集中强制；返回值 attempts 记录了每次重试与退避。",
    "写操作保持单写者（D5）：读可以并行，写要串行或放进 staffs_worktree 隔离区。",
+   "run/spawn 的 (model, thinking) 可能由 Jev 路由池按任务选型（prelude 的 you 段落为准）；不要在派发点手传模型，staffs.run({ route: false }) 可跳过路由回到档位矩阵。",
 ].join("\n");
 
 /** 一行展示某个角色在当前档位下的实际模型（HOST 侧解释别名，guest 侧只看解析结果）。 */
@@ -69,6 +74,11 @@ const describeRole = (
  */
 export default function piStaffs(pi: ExtensionAPI): void {
    let cache: { config: StaffsConfig; path: string } | undefined;
+
+   /** 缓存更新唯一入口（票 11）：谁写盘谁 remember，散落赋值容易在重构时漏更新导致幽灵配置。 */
+   const rememberConfig = (config: StaffsConfig, path: string): void => {
+      cache = { config, path };
+   };
    let announce:
       | ((message: string, level?: "info" | "warning" | "error") => void)
       | undefined;
@@ -102,7 +112,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
    pi.on("session_start", async (_event, ctx) => {
       announce = (message, level) => ctx.ui.notify(message, level ?? "info");
       const outcome = loadStaffsConfig();
-      cache = { config: outcome.config, path: outcome.path };
+      rememberConfig(outcome.config, outcome.path);
       if (outcome.created) {
          ctx.ui.notify(
             `Pi-Staffs 已生成角色矩阵 ${outcome.path}（${Object.keys(outcome.config.roles).length} 个角色，档位 ${activePresetName(outcome.config) || "无"}）。用 /staffs 查看。`,
@@ -111,9 +121,11 @@ export default function piStaffs(pi: ExtensionAPI): void {
       }
       for (const issue of outcome.issues)
          ctx.ui.notify(`Pi-Staffs 配置：${issue}`, "warning");
+      // 票 04：当日未拉则后台刷 AA 快照；fire-and-forget，任何失败都不碰会话启动。
+      void refreshPoolAa().catch(() => {});
    });
 
-   pi.on("tool_call", (event) => {
+   pi.on("tool_call", async (event) => {
       if (
          !isToolCallEventType("fabric_exec", event) ||
          typeof event.input.code !== "string"
@@ -123,8 +135,15 @@ export default function piStaffs(pi: ExtensionAPI): void {
       // prelude 挂到入参而不是拼进 code（pi-fabric ≥ 0.93.0）：门禁与源映射都归宿主，模型的
       // 代码一个字都不动。过去拼字符串时，prelude 里任何类型错误都会以模型代码的行号报出来，
       // 并把整条 fabric_exec 通道一起拒掉（见本仓 67ae6d5 的实机故障）。
+      // 票 03：派发前先让 Jev 按角色答三问，从模型池选出 (model, thinking) 覆盖档位；
+      // 任何失败路径 resolveRouteMap 都返回空表，档位矩阵原样生效（派发永不阻塞）。
+      const routes = await resolveRouteMap(config, readAliases(fabricConfigPath()), {
+         // 截断只在 route.ts（CONTEXT_CHARS）做一次（票 09）：这里再截一道是重复魔法数。
+         taskContext: String(event.input.code ?? ""),
+      });
       event.input.prelude = buildStaffsPrelude({
          config,
+         routes,
          promptFallback: readRolePrompt,
       });
    });
@@ -186,7 +205,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
          ),      handler: async (args, ctx) => {
          const requested = String(args ?? "").trim();
          const outcome = loadStaffsConfig();
-         cache = { config: outcome.config, path: outcome.path };
+         rememberConfig(outcome.config, outcome.path);
          const { config, path } = outcome;
          const available = Object.keys(config.presets ?? {});
          /** 交互面板的宿主依赖统一注入：roles 与 preset 两个面板共用同一套读写/提示。 */
@@ -194,7 +213,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
             load: () => loadStaffsConfig(),
             save: (next, at) => {
                writeStaffsConfig(next, at);
-               cache = { config: next, path: at };
+               rememberConfig(next, at);
             },
             aliases: () => readAliases(fabricConfigPath()),
             models: () => {
@@ -249,7 +268,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
             }
             const next: StaffsConfig = { ...config, preset: name };
             writeStaffsConfig(next, path);
-            cache = { config: next, path };
+            rememberConfig(next, path);
             // 与 omo-slim 的差异：它必须 reload（agent 注册表在宿主里），我们的注入每轮读缓存，
             // 所以本会话后续派发即刻生效；正在跑的子 agent 不受影响（它们的角色在派发时已定型）。
             ctx.ui.notify(
@@ -301,7 +320,7 @@ export default function piStaffs(pi: ExtensionAPI): void {
             }
             const next: StaffsConfig = { ...config, panel: mode as PanelMode };
             writeStaffsConfig(next, path);
-            cache = { config: next, path };
+            rememberConfig(next, path);
             ctx.ui.notify(
                `Pi-Staffs 观测层已切到 ${mode}（下一轮生效）`,
                "info",
@@ -334,13 +353,42 @@ export default function piStaffs(pi: ExtensionAPI): void {
             return;
          }
 
+         if (requested.startsWith("jev refresh")) {
+            // 票 04 手动刷新：立即拉取并汇报更新条数；SWE-bench 无 API 永远提醒人工查榜。
+            const result = await refreshPoolAa();
+            if ("updated" in result)
+               ctx.ui.notify(
+                  `AA 快照已刷新：更新 ${result.updated} 条（${result.path}）。\n提醒：SWE-bench 无 API，需人工查榜更新对应列。`,
+                  "info",
+               );
+            else if ("skipped" in result)
+               ctx.ui.notify(
+                  `AA 拉取跳过：${result.reason}${result.guidance ? `\n${result.guidance}` : ""}`,
+                  "warning",
+               );
+            else ctx.ui.notify(result.error, "warning");
+            return;
+         }
+
+         if (requested === "jev" || requested.startsWith("jev ")) {
+            // 只读路由审计面板：跨包读共享池文件的 routingLog 段（票 03 落盘）。
+            // 池缺/空/坏由 loadJevPanelData → loadPool 兜底成空池，该段显示「暂无路由记录」，
+            // 面板其余部分照常渲染（不崩、不写池文件）。样式同 roles/preset 面板。
+            const jevIO: JevPanelIO = {
+               load: () => loadJevPanelData(),
+               notify: (message, level) => ctx.ui.notify(message, level ?? "info"),
+            };
+            await openJevPanel(ctx, jevIO);
+            return;
+         }
+
          const aliases = readAliases(fabricConfigPath());
          const lines = Object.keys(config.roles).map((name) =>
             describeRole(config, aliases, name),
          );
          const council = resolveCouncilModels(config, aliases);
          ctx.ui.notify(
-            `Pi-Staffs ${PI_STAFFS_VERSION} — ${path}\n档位：${activePresetName(config) || "（无）"}｜可用：${available.join(", ") || "（空）"}\n${lines.join("\n")}\n合议：${council.join(", ") || "（未配置 council.members / roles.council.councilMembers）"}\n派发：fabric_exec 里 staffs.run({ role, task })；切档位：/staffs preset <名字>；调参：/staffs roles；看板：/staffs board；观测层：/staffs panel <footer|widget|off>；体检：/staffs doctor`,
+            `Pi-Staffs ${PI_STAFFS_VERSION} — ${path}\n档位：${activePresetName(config) || "（无）"}｜可用：${available.join(", ") || "（空）"}\n${lines.join("\n")}\n合议：${council.join(", ") || "（未配置 council.members / roles.council.councilMembers）"}\n派发：fabric_exec 里 staffs.run({ role, task })；切档位：/staffs preset <名字>；调参：/staffs roles；看板：/staffs board；观测层：/staffs panel <footer|widget|off>；体检：/staffs doctor；路由审计：/staffs jev`,
             "info",
          );
          for (const issue of outcome.issues)
@@ -354,7 +402,8 @@ export default function piStaffs(pi: ExtensionAPI): void {
  * 为什么独立成纯函数：宿主对返回值原样显示、不做过滤，这里必须自己按当前输入过滤；
  * 拆出来 + presetNames 注入，冒烟可以直接断言逻辑、不用起 Pi。
  * 语义：第一段补子命令（子序列模糊）；敲到第二段改补该子命令的参数
- * （preset → 档位名、panel → footer/widget/off、skills → sync），无参数子命令给空。
+ * （preset → 档位名、panel → footer/widget/off、skills → sync），无参数子命令
+ * （roles / board / doctor / jev）给空。
  * 为什么按空格分词：命令参数来自输入框，子命令与参数以空格分隔；split 保留尾部
  * 空段，正好区分 preset 与 preset 加空格（后者已进入参数输入）。
  */
@@ -369,9 +418,11 @@ export function buildStaffsArgumentCompletions(
       { value: 'panel', label: 'panel', description: '观测层：footer / widget / off' },
       { value: 'board', label: 'board', description: '看板：进行中的派发与任务' },
       { value: 'doctor', label: 'doctor', description: '配置体检报告' },
+      { value: 'jev', label: 'jev', description: 'Jev 路由日志（只读审计面板）' },
    ];
    const ARGUMENTS: Record<string, AutocompleteItem[]> = {
       preset: presetNames.map((name) => ({ value: name, label: name, description: '模型档位' })),
+      jev: [{ value: 'refresh', label: 'refresh', description: '立即拉取 AA 快照写回池' }],
       panel: [
          { value: 'footer', label: 'footer', description: 'footer 一行数字' },
          { value: 'widget', label: 'widget', description: '常驻面板' },

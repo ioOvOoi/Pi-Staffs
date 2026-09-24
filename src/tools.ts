@@ -12,6 +12,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { extractReceipts, recordReceipts } from "./attempts.ts";
+import { doctorReport } from "./doctor.ts";
 import { readTaskSession, recoverJson, writeTaskSession } from "./hooks.ts";
 import {
    addTask,
@@ -38,16 +39,7 @@ import {
    parseFindings,
    planReviewRound,
 } from "./review.ts";
-import {
-   activePresetName,
-   fabricConfigPath,
-   loadStaffsConfig,
-   readAliases,
-   resolveCouncilModels,
-   resolveModelRef,
-   resolveRole,
-   type StaffsConfig,
-} from "./config.ts";
+import { loadStaffsConfig, type StaffsConfig } from "./config.ts";
 
 type ToolReply = {
    content: Array<{ type: "text"; text: string }>;
@@ -312,59 +304,6 @@ const runCli = (
       );
       if (options.input !== undefined) child.stdin?.end(options.input);
    });
-
-export type DoctorInput = {
-   config: StaffsConfig;
-   aliases: Record<string, string>;
-   state: StaffsState;
-   path?: string;
-   issues?: string[];
-};
-
-/** 体检报告（票 14/19）：全部是本地判定，不发网络请求——预检模型可用性由 guest 侧 staffs.preflight 负责。 */
-export const formatDoctorReport = (input: DoctorInput): string => {
-   const { config, aliases, state } = input;
-   const lines = [
-      `配置：${input.path ?? "（内存）"}`,
-      `档位：${activePresetName(config) || "（无，用角色基线模型）"}｜可用：${Object.keys(config.presets ?? {}).join(", ") || "（空）"}`,
-   ];
-   for (const name of Object.keys(config.roles)) {
-      const role = resolveRole(config, name);
-      if (!role) {
-         lines.push(`✗ ${name}: 解析失败（加载期已跳过）`);
-         continue;
-      }
-      const resolved = resolveModelRef(role.model, aliases);
-      const permissions =
-         (
-            role as {
-               permissions?: {
-                  allow?: string[];
-                  ask?: string[];
-                  deny?: string[];
-               };
-            }
-         ).permissions ?? {};
-      lines.push(
-         `${role.enabled === false ? "⏸" : "✓"} ${name}: ${resolved ? resolved.ref : "别名解析失败 → " + String(role.model)}` +
-            ` · thinking ${role.thinking} · ${role.mode} · tools ${(role.tools ?? []).join(",") || "-"}` +
-            ` · 权限 allow ${(permissions.allow ?? []).length}/ask ${(permissions.ask ?? []).length}/deny ${(permissions.deny ?? []).length}`,
-      );
-   }
-   lines.push(
-      `合议：${resolveCouncilModels(config, aliases).join(", ") || "（空：staffs.council 会直接拒绝，先配 council.members）"}`,
-      `外部引擎：${
-         Object.entries(config.acp ?? {})
-            .map(([name, engine]) => name + "=" + engine.command)
-            .join(", ") || "（空）"
-      }`,
-      `tracker：${config.tracker.kind}${config.tracker.directory ? " → " + config.tracker.directory : ""}${config.tracker.repo ? " → " + config.tracker.repo : ""}`,
-      `看板：派发 ${state.attempts.length} 条｜任务 ${state.tasks.length}（就绪 ${readyTasks(state).length}）｜信箱未读 ${state.mailbox.filter((message) => !message.read).length} 条`,
-   );
-   for (const issue of input.issues ?? []) lines.push("⚠ 配置问题：" + issue);
-   return lines.join("\n");
-};
-
 export const registerStaffsTools = (
    pi: ExtensionAPI,
    deps: ToolDeps = {},
@@ -896,15 +835,8 @@ export const registerStaffsTools = (
          "体检 Pi-Staffs：配置、档位、角色模型解析、权限表、合议成员、外部引擎、tracker 与看板。",
       parameters: Type.Object({}),
       async execute() {
-         const outcome = loadStaffsConfig();
-         const report = formatDoctorReport({
-            config: outcome.config,
-            aliases: readAliases(fabricConfigPath()),
-            state: readState(currentStatePath()),
-            path: outcome.path,
-            issues: outcome.issues,
-         });
-         return reply(report, { issues: outcome.issues.length });
+         const { text, issues } = doctorReport(currentStatePath());
+         return reply(text, { issues });
       },
    });
 
